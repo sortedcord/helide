@@ -7,6 +7,12 @@ allows transparent webpage backgrounds to show through too, while respecting
 the site's CSS. Text, images, and browser controls keep their normal opacity.
 These features are off by default.
 
+## Demo
+
+[![Helium transparency demonstration](docs/media/transparency-demo.gif)](docs/media/transparency-demo.mp4)
+
+Animated preview — click it to [watch the full-resolution recording](docs/media/transparency-demo.mp4).
+
 The patch targets Helium Linux `0.20.3.1`, shared Helium commit
 `2f81b9cafa38a95071e20de3f9cd6b0aca6d3c65`, and Chromium `156.0.8078.79`.
 It requires a native Wayland session and client side browser decorations. The
