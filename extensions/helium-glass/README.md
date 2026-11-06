@@ -72,16 +72,48 @@ contrast check so they can actually clear.
 `background.js` applies background-only CSS at user origin, targeted to the
 exact frame document. This works with page CSP and inline `!important` fills.
 Original inline styles are not edited. Unique element markers select grouped
-rules; rescans temporarily remove those markers before measuring the original
-page styles, so repeated scans do not keep reducing alpha.
+rules; rescans temporarily remove those markers and suspend provisional cached
+styles before measuring the original page, so repeated scans do not keep
+reducing alpha.
 
 A mutation observer rechecks added content and theme/style changes. Work runs
 in small idle batches, capped at 8,000 elements per scan and 1,000 distinct
 style groups per document. Returning to a tab triggers another scan. Per-site
 settings use the top-level site's host, including for cross-origin frames.
 
-`shared.js` contains setting defaults; `popup.*` implements the controls. The
+`shared.js` contains setting defaults, `cache.js` validates and renders learned
+backgrounds, and `popup.*` implements the controls. The
 extension uses Manifest V3 and requires Chromium 120 or later.
+
+## Loading and caching (0.2.0)
+
+The content script starts at [`document_start`](https://developer.chrome.com/docs/extensions/develop/concepts/content-scripts#run_time),
+instead of waiting for `document_idle`. A small priority pass handles the page
+canvas and visible ancestors first. The remaining page is scanned in idle
+batches. Startup does not wait for a full scan, a 180 ms debounce, or deferred
+page scripts. CSS updates are throttled to about one frame instead of having
+their timer postponed by each scan batch. Continuous page mutations also no
+longer keep resetting the scan timer.
+
+The extension learns original RGB/alpha values for `html`, `body`, and eligible
+large flat backgrounds with a unique simple ID or `main` tag. On a repeat visit,
+the service worker inserts provisional background CSS as soon as the document
+starts. It uses the current transparency strength, then hands over to fresh
+analysis once the new page's surfaces have been checked. Cards, text, media,
+images, and entire DOM snapshots are not cached.
+
+The local cache keeps up to **64 page paths**, with up to 24 background records
+each; entries expire after **seven days**. Keys are hashes of the page's origin
+and path; query strings and fragments are excluded. Pages on the same path can
+share a provisional record, which is always rechecked. Root/body theme classes
+and attributes guard replay, and a different OS color scheme skips it. Global
+and site opt-outs skip replay too. Incognito visits do not read or write this
+cache.
+
+This reduces the initial opaque flash; it cannot guarantee zero flashing on
+every page. A service-worker cold start, new backgrounds, late stylesheets,
+script-driven theme changes, or uncached containers can still need a fresh
+pass. First visits also benefit from the earlier priority scan.
 
 ## Limits
 
@@ -96,8 +128,8 @@ toggle or a lower strength. In particular:
   Deeply nested translucent fills also accumulate opacity.
 - Browser pages, the Chrome Web Store, and other restricted documents cannot
   be styled by content scripts. Embedded PDF viewers are not supported.
-- DOM changes are detected after they happen; there may be a short flash of the
-  original background while a page loads or switches theme. Constantly animated
+- DOM changes are detected after they happen; there may still be a short flash
+  of the original background while a page loads or switches theme. Constantly animated
   or very large pages can need a manual rescan.
 
 ## Privacy and permissions
@@ -105,7 +137,11 @@ toggle or a lower strength. In particular:
 Palette analysis happens entirely in the page's local content script. There are
 no uploads, analytics, remote styles, remote code, or external dependencies.
 The extension reads computed styles and element geometry; it does not collect
-page text or browsing history.
+page text. Saved site preferences contain hostnames. The bounded background
+cache stores colors, simple surface selectors, theme attributes, and hashed
+page-path keys; it contains no plaintext page URLs, query strings, HTML, or
+page text. This cache stays in extension-local storage, alongside preferences;
+it is separate from the browser's HTTP cache.
 
 HTTP/HTTPS host access is required to run automatically across websites. File
 access is optional and controlled by the browser. `scripting` inserts/removes
@@ -119,7 +155,7 @@ website. There is no compilation step.
 
 ```sh
 # From the repository root; Node's built-in test runner, no npm install.
-node --test extensions/helium-glass/test/palette.test.cjs
+node --test extensions/helium-glass/test/*.test.cjs
 
 # Native Wayland integration check: built Helium, matching ChromeDriver, Pillow.
 python3 extensions/helium-glass/test/browser.py
@@ -128,7 +164,11 @@ python3 extensions/helium-glass/test/browser.py
 The browser check uses a temporary profile and local HTTP fixtures. It checks
 rendered screenshot alpha, CSP and inline important styles, gradients, protected
 controls, theme changes, dynamic cards, saved settings, cross-origin frames,
-and restoration when disabled. `--binary` and `--driver` override the default
+and restoration when disabled. A deliberately delayed page checks transparency
+before `DOMContentLoaded`, cache replay, fresh-color sampling, theme guards,
+and cached-load opt-outs. `--startup-only` prints first/repeat-visit timings;
+`--extension PATH` can compare another unpacked version. `--binary` and
+`--driver` override the default
 `build/src/out/Default` executables. It does not modify your existing profile.
 
 To make a release ZIP from a source checkout, run from this directory:

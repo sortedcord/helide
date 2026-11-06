@@ -225,6 +225,11 @@ shadow DOM are not rewritten. See its README for installation, permissions,
 limitations, and tests, or try the included
 [surface demo](extensions/helium-glass/demo.html).
 
+Version 0.2 starts at document creation, prioritizes visible backgrounds, and
+locally caches learned page-canvas colors for earlier styling on repeat visits.
+Cached fills are checked against the loaded page and replaced by fresh analysis.
+The bounded cache expires after seven days and respects site/global opt-outs.
+
 ## License
 
 Helium's original license and attribution are preserved. Helium-specific code

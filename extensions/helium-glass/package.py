@@ -15,7 +15,7 @@ def main():
     parser.add_argument("--output", type=Path,
         default=ROOT.parents[1] / "build/release" / f"helium-glass-{version}.zip")
     args = parser.parse_args()
-    files = ["manifest.json", "background.js", "shared.js", "palette.js", "content.js",
+    files = ["manifest.json", "background.js", "shared.js", "palette.js", "cache.js", "content.js",
              "popup.html", "popup.css", "popup.js", "demo.html", "demo.css", "demo.js",
              "README.md", "LICENSE", *(f"icons/{size}.png" for size in (16, 32, 48, 128))]
     args.output.parent.mkdir(parents=True, exist_ok=True)
