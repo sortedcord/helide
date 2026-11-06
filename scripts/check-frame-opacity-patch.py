@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Check the experimental patch against pinned sources without compiling."""
 
+import argparse
 import concurrent.futures
 import pathlib
 import re
@@ -31,7 +32,14 @@ def apply(work, text, reverse=False):
 
 
 def main():
-    experiment = (ROOT / "patches" / EXPERIMENT).read_text()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--patch",
+        default=EXPERIMENT,
+        choices=[EXPERIMENT, "helium/linux/wayland-frame-blur.patch"],
+    )
+    selected = parser.parse_args().patch
+    experiment = (ROOT / "patches" / selected).read_text()
     targets = {path for path, _ in sections(experiment)}
     previous = []
     found = False
@@ -40,7 +48,7 @@ def main():
             name = line.strip()
             if not name or name.startswith("#"):
                 continue
-            if folder == ROOT / "patches" and name == EXPERIMENT:
+            if folder == ROOT / "patches" and name == selected:
                 found = True
                 break
             previous.extend(
@@ -77,7 +85,7 @@ def main():
             if (work / path).read_bytes() != original:
                 raise RuntimeError(f"Patch round trip changed {path}")
     print(
-        f"PASS: Chromium {version}, {len(targets)} files, "
+        f"PASS: {selected}, Chromium {version}, {len(targets)} files, "
         f"{len(previous)} existing patch sections; zero-fuzz apply/reverse. "
         "No build performed."
     )

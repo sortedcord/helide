@@ -1,0 +1,337 @@
+--- a/third_party/wayland-protocols/BUILD.gn
++++ b/third_party/wayland-protocols/BUILD.gn
+@@ -138,6 +138,10 @@
+ 
+ wayland_protocol("secure_output_protocol") {
+   sources = [ "unstable/secure-output/secure-output-unstable-v1.xml" ]
++}
++
++wayland_protocol("background_effect") {
++  sources = [ "src/staging/ext-background-effect/ext-background-effect-v1.xml" ]
+ }
+ 
+ wayland_protocol("single_pixel_buffer") {
+--- a/ui/ozone/platform/wayland/BUILD.gn
++++ b/ui/ozone/platform/wayland/BUILD.gn
+@@ -275,6 +275,7 @@
+     "//third_party/wayland-protocols:presentation_time_protocol",
+     "//third_party/wayland-protocols:primary_selection_protocol",
+     "//third_party/wayland-protocols:relative_pointer_protocol",
++    "//third_party/wayland-protocols:background_effect",
+     "//third_party/wayland-protocols:single_pixel_buffer",
+     "//third_party/wayland-protocols:tablet_protocol",
+     "//third_party/wayland-protocols:text_input_protocol",
+--- a/ui/ozone/platform/wayland/common/wayland_object.h
++++ b/ui/ozone/platform/wayland/common/wayland_object.h
+@@ -103,6 +103,8 @@
+   }  // namespace wl
+ 
+ // For convenience, keep aphabetical order in this list.
++DECLARE_WAYLAND_OBJECT_TRAITS(ext_background_effect_manager_v1)
++DECLARE_WAYLAND_OBJECT_TRAITS(ext_background_effect_surface_v1)
+ DECLARE_WAYLAND_OBJECT_TRAITS(ext_idle_notifier_v1)
+ DECLARE_WAYLAND_OBJECT_TRAITS(ext_idle_notification_v1)
+ DECLARE_WAYLAND_OBJECT_TRAITS(gtk_primary_selection_device)
+--- a/ui/ozone/platform/wayland/common/wayland_object.cc
++++ b/ui/ozone/platform/wayland/common/wayland_object.cc
+@@ -9,6 +9,7 @@
+ #include <color-management-v1-client-protocol.h>
+ #include <content-type-v1-client-protocol.h>
+ #include <cursor-shape-v1-client-protocol.h>
++#include <ext-background-effect-v1-client-protocol.h>
+ #include <ext-idle-notify-v1-client-protocol.h>
+ #include <extended-drag-unstable-v1-client-protocol.h>
+ #include <fractional-scale-v1-client-protocol.h>
+@@ -150,6 +151,8 @@
+   IMPLEMENT_WAYLAND_OBJECT_TRAITS_WITH_DELETER(TYPE, TYPE##_destroy)
+ 
+ // For convenience, keep aphabetical order in this list.
++IMPLEMENT_WAYLAND_OBJECT_TRAITS(ext_background_effect_manager_v1)
++IMPLEMENT_WAYLAND_OBJECT_TRAITS(ext_background_effect_surface_v1)
+ IMPLEMENT_WAYLAND_OBJECT_TRAITS(ext_idle_notifier_v1)
+ IMPLEMENT_WAYLAND_OBJECT_TRAITS(ext_idle_notification_v1)
+ IMPLEMENT_WAYLAND_OBJECT_TRAITS(gtk_primary_selection_device)
+--- a/ui/ozone/platform/wayland/host/wayland_connection.h
++++ b/ui/ozone/platform/wayland/host/wayland_connection.h
+@@ -101,6 +101,9 @@
+     return content_type_manager_v1_.get();
+   }
+   wp_viewporter* viewporter() const { return viewporter_.get(); }
++  ext_background_effect_manager_v1* background_effect_manager() const {
++    return background_effect_manager_.get();
++  }
+   zcr_alpha_compositing_v1* alpha_compositing() const {
+     return alpha_compositing_.get();
+   }
+@@ -418,6 +421,7 @@
+   wl::Object<wp_content_type_manager_v1> content_type_manager_v1_;
+   wl::Object<wp_presentation> presentation_;
+   wl::Object<wp_viewporter> viewporter_;
++  wl::Object<ext_background_effect_manager_v1> background_effect_manager_;
+   wl::Object<zcr_alpha_compositing_v1> alpha_compositing_;
+   wl::Object<zcr_keyboard_extension_v1> keyboard_extension_v1_;
+   wl::Object<zwp_keyboard_shortcuts_inhibit_manager_v1>
+--- a/ui/ozone/platform/wayland/host/wayland_connection.cc
++++ b/ui/ozone/platform/wayland/host/wayland_connection.cc
+@@ -5,11 +5,13 @@
+ #include "ui/ozone/platform/wayland/host/wayland_connection.h"
+ 
+ #include <content-type-v1-client-protocol.h>
++#include <ext-background-effect-v1-client-protocol.h>
+ #include <extended-drag-unstable-v1-client-protocol.h>
+ #include <presentation-time-client-protocol.h>
+ #include <xdg-shell-client-protocol.h>
+ 
+ #include <cstdint>
++#include <string_view>
+ 
+ #include "base/command_line.h"
+ #include "base/compiler_specific.h"
+@@ -641,6 +643,22 @@
+       LOG(ERROR) << "Failed to bind to wl_compositor global";
+       return;
+     }
++  } else if (!background_effect_manager_ &&
++             std::string_view(interface) ==
++                 "ext_background_effect_manager_v1") {
++    background_effect_manager_ =
++        wl::Bind<ext_background_effect_manager_v1>(registry, name, 1);
++    if (!background_effect_manager_) {
++      return;
++    }
++    // The protocol permits setting a region before capabilities arrive and
++    // automatically suspends effects when the compositor withdraws support.
++    static constexpr ext_background_effect_manager_v1_listener kListener = {
++        .capabilities = [](void*, ext_background_effect_manager_v1*,
++                           uint32_t) {},
++    };
++    ext_background_effect_manager_v1_add_listener(
++        background_effect_manager_.get(), &kListener, this);
+   } else if (!subcompositor_ &&
+              UNSAFE_TODO(strcmp(interface, "wl_subcompositor")) == 0) {
+     subcompositor_ = wl::Bind<wl_subcompositor>(registry, name, 1);
+--- a/ui/platform_window/platform_window.h
++++ b/ui/platform_window/platform_window.h
+@@ -188,6 +188,11 @@
+   // existing region will be reset.
+   virtual void SetOpaqueRegion(std::optional<std::vector<gfx::Rect>> region_px);
+ 
++  // Request compositor background blur in surface-local physical pixels.
++  // An empty region removes the request. Unsupported platforms ignore it;
++  // blur strength and algorithm are compositor policy.
++  virtual void SetBackgroundBlurRegion(const std::vector<gfx::Rect>& region_px);
++
+   // Sets the clickable region of a window.  This is useful for trimming down a
+   // potentially large (24px) hit area for window resizing on the window shadow
+   // to a more reasonable (10px) area.  If |region_px| is nullopt, then any
+--- a/ui/platform_window/platform_window.cc
++++ b/ui/platform_window/platform_window.cc
+@@ -67,6 +67,9 @@
+ void PlatformWindow::SetOpaqueRegion(
+     std::optional<std::vector<gfx::Rect>> region_px) {}
+ 
++void PlatformWindow::SetBackgroundBlurRegion(
++    const std::vector<gfx::Rect>& region_px) {}
++
+ void PlatformWindow::SetInputRegion(
+     std::optional<std::vector<gfx::Rect>> region_px) {}
+ 
+--- a/ui/ozone/platform/wayland/host/wayland_toplevel_window.h
++++ b/ui/ozone/platform/wayland/host/wayland_toplevel_window.h
+@@ -117,6 +117,8 @@
+   bool CanSetDecorationInsets() const override;
+   void SetOpaqueRegion(
+       std::optional<std::vector<gfx::Rect>> region_px) override;
++  void SetBackgroundBlurRegion(
++      const std::vector<gfx::Rect>& region_px) override;
+   void SetInputRegion(std::optional<std::vector<gfx::Rect>> region_px) override;
+   bool IsClientControlledWindowMovementSupported() const override;
+ 
+--- a/ui/ozone/platform/wayland/host/wayland_toplevel_window.cc
++++ b/ui/ozone/platform/wayland/host/wayland_toplevel_window.cc
+@@ -446,6 +446,11 @@
+   root_surface()->set_opaque_region(region_px);
+ }
+ 
++void WaylandToplevelWindow::SetBackgroundBlurRegion(
++    const std::vector<gfx::Rect>& region_px) {
++  root_surface()->set_background_blur_region(region_px);
++}
++
+ void WaylandToplevelWindow::SetInputRegion(
+     std::optional<std::vector<gfx::Rect>> region_px) {
+   input_region_px_ = region_px;
+--- a/ui/ozone/platform/wayland/host/wayland_surface.h
++++ b/ui/ozone/platform/wayland/host/wayland_surface.h
+@@ -126,6 +126,7 @@
+   // physical pixels.  If |region_px| is nullopt or empty, the opaque region is
+   // reset to empty.
+   void set_opaque_region(std::optional<std::vector<gfx::Rect>> region_px);
++  void set_background_blur_region(const std::vector<gfx::Rect>& region_px);
+ 
+   // Sets the input region on this surface in physical pixels.
+   // The input region indicates which parts of the surface accept pointer and
+@@ -258,6 +259,7 @@
+ 
+     std::vector<gfx::Rect> damage_px;
+     std::vector<gfx::Rect> opaque_region_px;
++    std::vector<gfx::Rect> background_blur_region_px;
+     std::vector<gfx::Rect> input_region_px;
+ 
+     // The current color space and HDR metadata of the surface.
+@@ -340,6 +342,8 @@
+   // scales.
+   int32_t surface_scale_set_ = 1;
+ 
++  bool ApplyBackgroundBlurRegion();
++
+   wl::Object<wl_region> CreateAndAddRegion(
+       const std::vector<gfx::Rect>& region_px,
+       float buffer_scale);
+@@ -356,6 +360,8 @@
+   raw_ptr<WaylandWindow> root_window_ = nullptr;
+   bool apply_state_immediately_ = false;
+   wl::Object<wl_surface> surface_;
++  // Declared after surface_ so the effect is destroyed before its wl_surface.
++  wl::Object<ext_background_effect_surface_v1> background_effect_surface_;
+   wl::Object<wp_viewport> viewport_;
+   wl::Object<zcr_blending_v1> blending_;
+   wl::Object<wp_linux_drm_syncobj_surface_v1> surface_sync_;
+--- a/ui/ozone/platform/wayland/host/wayland_surface.cc
++++ b/ui/ozone/platform/wayland/host/wayland_surface.cc
+@@ -6,6 +6,7 @@
+ 
+ #include <alpha-compositing-unstable-v1-client-protocol.h>
+ #include <content-type-v1-client-protocol.h>
++#include <ext-background-effect-v1-client-protocol.h>
+ #include <fractional-scale-v1-client-protocol.h>
+ #include <linux-drm-syncobj-v1-client-protocol.h>
+ #include <overlay-prioritizer-client-protocol.h>
+@@ -334,6 +335,39 @@
+   }
+ }
+ 
++void WaylandSurface::set_background_blur_region(
++    const std::vector<gfx::Rect>& region_px) {
++  pending_state_.background_blur_region_px = region_px;
++  if (apply_state_immediately_) {
++    ApplyBackgroundBlurRegion();
++    state_.background_blur_region_px = region_px;
++  }
++}
++
++bool WaylandSurface::ApplyBackgroundBlurRegion() {
++  auto* manager = connection_->background_effect_manager();
++  if (!manager) {
++    return false;
++  }
++  if (!background_effect_surface_) {
++    if (pending_state_.background_blur_region_px.empty()) {
++      return false;
++    }
++    background_effect_surface_.reset(
++        ext_background_effect_manager_v1_get_background_effect(manager,
++                                                               surface_.get()));
++  }
++  // Region and scale use the same conversion as input/opaque regions. The
++  // effect state is committed atomically with the next wl_surface commit.
++  auto region = CreateAndAddRegion(pending_state_.background_blur_region_px,
++                                   GetWaylandScale(pending_state_));
++  ext_background_effect_surface_v1_set_blur_region(
++      background_effect_surface_.get(),
++      pending_state_.background_blur_region_px.empty() ? nullptr
++                                                       : region.get());
++  return true;
++}
++
+ void WaylandSurface::set_input_region(
+     std::optional<std::vector<gfx::Rect>> region_px) {
+   pending_state_.input_region_px.clear();
+@@ -603,6 +637,14 @@
+ 
+   // It's important to set opaque region for opaque windows (provides
+   // optimization hint for the Wayland compositor).
++  if (pending_state_.background_blur_region_px !=
++          state_.background_blur_region_px ||
++      GetWaylandScale(pending_state_) != GetWaylandScale(state_) ||
++      (!background_effect_surface_ &&
++       !pending_state_.background_blur_region_px.empty())) {
++    needs_commit |= ApplyBackgroundBlurRegion();
++  }
++
+   if (pending_state_.opaque_region_px != state_.opaque_region_px ||
+       GetWaylandScale(pending_state_) != GetWaylandScale(state_)) {
+     wl_surface_set_opaque_region(
+@@ -822,6 +864,7 @@
+     const WaylandSurface::State& other) {
+   damage_px = other.damage_px;
+   opaque_region_px = other.opaque_region_px;
++  background_blur_region_px = other.background_blur_region_px;
+   input_region_px = other.input_region_px;
+   color_space = other.color_space;
+   hdr_metadata = other.hdr_metadata;
+--- a/chrome/browser/ui/views/frame/browser_desktop_window_tree_host_linux.cc
++++ b/chrome/browser/ui/views/frame/browser_desktop_window_tree_host_linux.cc
+@@ -7,6 +7,7 @@
+ #include <optional>
+ #include <utility>
+ 
++#include "base/command_line.h"
+ #include "base/no_destructor.h"
+ #include "build/build_config.h"
+ #include "chrome/browser/ui/browser_init_state.h"
+@@ -203,6 +204,25 @@
+       opaque_region.clear();
+     }
+     window->SetOpaqueRegion(opaque_region);
++
++    std::vector<gfx::Rect> blur_region;
++    const bool request_blur =
++        helium::ShouldUseWaylandFrameOpacity(browser_view_) &&
++        !browser_widget_->IsFullscreen() &&
++        base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
++            "helium-frame-blur") == "1";
++    if (request_blur) {
++      // Opaque content covers the effect. Limit the outer shape to the client
++      // frame so compositor blur does not extend behind invisible shadows.
++      if (IsShowingFrame(native_widget_->UseCustomFrame(), window_state)) {
++        blur_region = views::GetRestoredOpaqueRegion(
++            view->GetRestoredClipRegion(), scale, 0);
++      } else {
++        blur_region.push_back(
++            gfx::ScaleToEnclosingRect(gfx::Rect(widget_size), scale));
++      }
++    }
++    window->SetBackgroundBlurRegion(blur_region);
+   }
+ 
+   SizeConstraintsChanged();
+--- a/chrome/browser/helium_flag_choices.h
++++ b/chrome/browser/helium_flag_choices.h
+@@ -61,6 +61,12 @@
+     {"25%", kHeliumFrameOpacityCommandLine, "0.25"},
+     {"0% (clear frame)", kHeliumFrameOpacityCommandLine, "0"},
+ };
++constexpr const char kHeliumFrameBlurCommandLine[] = "helium-frame-blur";
++constexpr const FeatureEntry::Choice kHeliumFrameBlurChoices[] = {
++    {flags_ui::kGenericExperimentChoiceDefault, "", ""},
++    {"Enabled", kHeliumFrameBlurCommandLine, "1"},
++    {"Disabled", kHeliumFrameBlurCommandLine, "0"},
++};
+ }  // namespace helium
+ 
+ #endif /* CHROME_BROWSER_HELIUM_FLAG_CHOICES_H_ */
+--- a/chrome/browser/helium_flag_entries.h
++++ b/chrome/browser/helium_flag_entries.h
+@@ -89,6 +89,11 @@
+      "stays opaque. Uses Helium's own title bar even if the system title bar "
+      "is enabled. Experimental Helium flag.",
+      kOsLinux, MULTI_VALUE_TYPE(helium::kHeliumFrameOpacityChoices)},
++    {helium::kHeliumFrameBlurCommandLine, "Wayland frame blur",
++     "Requests compositor blur behind a translucent browser frame. Requires "
++     "Wayland background-effect support and a frame opacity below 100%. "
++     "Strength is controlled by the compositor. Requires relaunch.",
++     kOsLinux, MULTI_VALUE_TYPE(helium::kHeliumFrameBlurChoices)},
+     // platform
+     {helium::kMiddleClickPasteEnabledCommandLine, "Middle Click Paste",
+      "Controls middle click paste functionality. Helium flag.", kOsLinux,

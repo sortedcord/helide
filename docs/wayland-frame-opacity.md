@@ -64,7 +64,9 @@ multiplier to web content.
 Custom theme images are suppressed by the reused material hooks; the frame uses
 the theme's frame color as its tint. Floating controls may retain their own
 backgrounds. Blur is separate and depends on compositor support/configuration;
-this patch requests only alpha compositing.
+this patch requests only alpha compositing. The optional
+[`wayland-frame-blur.patch`](../patches/helium/linux/wayland-frame-blur.patch)
+adds a compositor blur request; see the [blur configuration in the README](../README.md#enable-or-disable-blur).
 
 Protocol and source references:
 
