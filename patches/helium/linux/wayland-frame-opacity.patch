@@ -1,0 +1,341 @@
+--- a/chrome/browser/ui/views/helium/native_frame_materials.h
++++ b/chrome/browser/ui/views/helium/native_frame_materials.h
+@@ -5,6 +5,8 @@
+ #ifndef CHROME_BROWSER_UI_VIEWS_HELIUM_NATIVE_FRAME_MATERIALS_H_
+ #define CHROME_BROWSER_UI_VIEWS_HELIUM_NATIVE_FRAME_MATERIALS_H_
+ 
++#include "third_party/skia/include/core/SkColor.h"
++
+ class BrowserView;
+ class BrowserWindowInterface;
+ 
+@@ -14,6 +16,15 @@
+ 
+ namespace helium {
+ 
++// Experimental, Linux only. --helium-frame-opacity=<0..1> makes the frame of
++// normal browser windows translucent on the Wayland backend. Missing or
++// invalid values, other backends and other window types keep an opaque frame.
++// Page content is never made translucent.
++bool ShouldUseWaylandFrameOpacity(const BrowserView* browser_view);
++
++// Returns `frame_color` with the requested frame opacity as its alpha.
++SkColor GetWaylandFrameTint(SkColor frame_color);
++
+ bool ShouldUseNativeFrameMaterials(const BrowserView* browser_view);
+ bool ShouldUseNativeFrameMaterials(const BrowserWindowInterface* browser);
+ bool ShouldUseNativeFrameMaterials(const views::View* view);
+--- a/chrome/browser/ui/views/helium/native_frame_materials.cc
++++ b/chrome/browser/ui/views/helium/native_frame_materials.cc
+@@ -4,6 +4,10 @@
+ 
+ #include "chrome/browser/ui/views/helium/native_frame_materials.h"
+ 
++#include <cmath>
++
++#include "base/command_line.h"
++#include "base/strings/string_number_conversions.h"
+ #include "build/build_config.h"
+ #include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+@@ -14,8 +18,56 @@
+ #include "ui/views/view.h"
+ #include "ui/views/widget/widget.h"
+ 
++#if BUILDFLAG(IS_LINUX)
++#include "ui/ozone/public/ozone_platform.h"
++#endif
++
+ namespace helium {
+ 
++namespace {
++
++double GetWaylandFrameOpacity() {
++#if BUILDFLAG(IS_LINUX)
++  // Every caller holds a live BrowserView, so about:flags entries have
++  // already been converted to switches and the Ozone backend is selected.
++  static const double opacity = [] {
++    // RunningOnWaylandForTest() reports the backend Ozone selected; the public
++    // Ozone API has no backend-name query without the ForTest suffix.
++    if (!ui::OzonePlatform::RunningOnWaylandForTest()) {
++      return 1.0;
++    }
++    // helium::kHeliumFrameOpacityCommandLine, spelled out like the other
++    // Helium flag consumers do.
++    double value = 1.0;
++    if (!base::StringToDouble(
++            base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
++                "helium-frame-opacity"),
++            &value) ||
++        !std::isfinite(value) || value < 0.0 || value > 1.0) {
++      return 1.0;
++    }
++    return value;
++  }();
++  return opacity;
++#else
++  return 1.0;
++#endif
++}
++
++}  // namespace
++
++bool ShouldUseWaylandFrameOpacity(const BrowserView* browser_view) {
++  // App, popup, devtools and picture-in-picture windows keep their own frames.
++  return browser_view && browser_view->GetIsNormalType() &&
++         GetWaylandFrameOpacity() < 1.0;
++}
++
++SkColor GetWaylandFrameTint(SkColor frame_color) {
++  return SkColorSetA(
++      frame_color,
++      static_cast<U8CPU>(std::lround(GetWaylandFrameOpacity() * 255.0)));
++}
++
+ bool ShouldUseNativeFrameMaterials(const BrowserView* browser_view) {
+ #if BUILDFLAG(IS_MAC)
+   if (!features::HeliumNativeFrameAvailable() || !browser_view) {
+@@ -30,6 +82,9 @@
+   const Profile* profile = browser_view->GetProfile();
+   return profile &&
+          profile->GetPrefs()->GetBoolean(prefs::kHeliumNativeFrameMaterials);
++#elif BUILDFLAG(IS_LINUX)
++  // Reuse the shared frame-fill suppression for the translucent Wayland frame.
++  return ShouldUseWaylandFrameOpacity(browser_view);
+ #else
+   return false;
+ #endif
+--- a/chrome/browser/ui/views/frame/opaque_browser_frame_view.cc
++++ b/chrome/browser/ui/views/frame/opaque_browser_frame_view.cc
+@@ -19,6 +19,7 @@
+ #include "chrome/browser/ui/views/frame/caption_button_placeholder_container.h"
+ #include "chrome/browser/ui/views/frame/opaque_browser_frame_view_layout.h"
+ #include "chrome/browser/ui/views/frame/top_container_view.h"
++#include "chrome/browser/ui/views/helium/native_frame_materials.h"
+ #include "chrome/browser/ui/views/tab_icon_view.h"
+ #include "chrome/browser/ui/views/tabs/new_tab_button.h"
+ #include "chrome/browser/ui/views/tabs/tab_strip.h"
+@@ -709,6 +710,20 @@
+     }
+   }
+ 
++  if (helium::ShouldUseWaylandFrameOpacity(GetBrowserView())) {
++    // Only the frame fill is translucent. The shared native material hooks
++    // suppress the opaque chrome fills above it; page content stays opaque.
++    if (IsFrameCondensed()) {
++      canvas->FillRect(GetLocalBounds(),
++                       helium::GetWaylandFrameTint(frame_color));
++    } else {
++      // BrowserFrameViewLinux paints the tint inside the window shape and
++      // keeps the window edge and client-side shadow.
++      PaintRestoredFrameBorder(canvas);
++    }
++    return;
++  }
++
+   if (IsFrameCondensed()) {
+     PaintMaximizedFrameBorder(canvas);
+   } else {
+--- a/chrome/browser/ui/views/frame/browser_frame_view_linux.cc
++++ b/chrome/browser/ui/views/frame/browser_frame_view_linux.cc
+@@ -5,11 +5,14 @@
+ #include "chrome/browser/ui/views/frame/browser_frame_view_linux.h"
+ 
+ #include "base/notreached.h"
++#include "cc/paint/paint_flags.h"
+ #include "chrome/browser/ui/views/chrome_layout_provider.h"
+ #include "chrome/browser/ui/views/frame/browser_native_widget_aura_linux.h"
+ #include "chrome/browser/ui/views/frame/browser_view.h"
++#include "chrome/browser/ui/views/helium/native_frame_materials.h"
+ #include "ui/base/hit_test.h"
+ #include "ui/base/metadata/metadata_impl_macros.h"
++#include "ui/gfx/canvas.h"
+ #include "ui/gfx/geometry/insets_f.h"
+ #include "ui/gfx/geometry/rect_f.h"
+ #include "ui/gfx/geometry/rounded_corners_f.h"
+@@ -77,10 +80,23 @@
+ #endif
+   auto shadow_values =
+       tiled ? gfx::ShadowValues() : GetShadowValues(ShouldPaintAsActive());
++  const bool translucent =
++      helium::ShouldUseWaylandFrameOpacity(GetBrowserView());
++  if (translucent) {
++    // Fill the window shape with the translucent tint in place of the opaque
++    // frame background. The window edge and client-side shadow are still
++    // drawn below; the shadow is clipped to outside the window shape.
++    cc::PaintFlags flags;
++    flags.setAntiAlias(true);
++    flags.setColor(helium::GetWaylandFrameTint(
++        GetFrameColor(BrowserFrameActiveState::kUseCurrent)));
++    canvas->sk_canvas()->drawRRect(GetRestoredClipRegion(), flags);
++  }
+   views::PaintRestoredFrameBorderLinux(
+-      *canvas, *this, frame_background(), GetRestoredClipRegion(),
+-      ShouldDrawRestoredFrameShadow(), ShouldPaintAsActive(),
+-      layout_->RestoredMirroredFrameBorderInsets(), shadow_values, tiled);
++      *canvas, *this, translucent ? nullptr : frame_background(),
++      GetRestoredClipRegion(), ShouldDrawRestoredFrameShadow(),
++      ShouldPaintAsActive(), layout_->RestoredMirroredFrameBorderInsets(),
++      shadow_values, tiled);
+ }
+ 
+ void BrowserFrameViewLinux::GetWindowMask(const gfx::Size& size,
+--- a/chrome/browser/ui/views/frame/browser_frame_view_linux_native.cc
++++ b/chrome/browser/ui/views/frame/browser_frame_view_linux_native.cc
+@@ -6,6 +6,7 @@
+ 
+ #include "base/notreached.h"
+ #include "chrome/browser/ui/views/frame/browser_frame_view_layout_linux_native.h"
++#include "chrome/browser/ui/views/helium/native_frame_materials.h"
+ #include "ui/base/metadata/metadata_impl_macros.h"
+ #include "ui/linux/linux_ui.h"
+ #include "ui/views/window/frame_background.h"
+@@ -57,6 +58,12 @@
+ 
+ void BrowserFrameViewLinuxNative::PaintRestoredFrameBorder(
+     gfx::Canvas* canvas) const {
++  if (helium::ShouldUseWaylandFrameOpacity(GetBrowserView())) {
++    // The GTK window frame is opaque, so paint the translucent tint, edge and
++    // shadow of the default Linux frame instead.
++    BrowserFrameViewLinux::PaintRestoredFrameBorder(canvas);
++    return;
++  }
+   layout_->GetFrameProvider()->PaintWindowFrame(
+       canvas, GetLocalBounds(), GetTopAreaHeight(), ShouldPaintAsActive(),
+       GetInputInsets());
+--- a/chrome/browser/ui/views/frame/browser_desktop_window_tree_host_linux.cc
++++ b/chrome/browser/ui/views/frame/browser_desktop_window_tree_host_linux.cc
+@@ -15,6 +15,7 @@
+ #include "chrome/browser/ui/views/frame/browser_native_widget_aura_linux.h"
+ #include "chrome/browser/ui/views/frame/browser_view.h"
+ #include "chrome/browser/ui/views/frame/safe_invoke/safe_invoke.h"
++#include "chrome/browser/ui/views/helium/native_frame_materials.h"
+ #include "chrome/browser/ui/views/tabs/dragging/tab_drag_controller.h"
+ #include "chrome/browser/ui/views/tabs/tab_strip.h"
+ #include "third_party/abseil-cpp/absl/container/flat_hash_set.h"
+@@ -194,6 +195,13 @@
+       opaque_region.push_back(
+           gfx::ScaleToEnclosingRect(opaque_region_dip, scale));
+     }
++    if (helium::ShouldUseWaylandFrameOpacity(browser_view_)) {
++      // The frame is translucent, so no region may be declared opaque. An
++      // empty hint only costs compositor occlusion culling; a content-area hint
++      // would be wrong over rounded corners, vertical tabs and split-view gaps,
++      // and go stale as the layout changes.
++      opaque_region.clear();
++    }
+     window->SetOpaqueRegion(opaque_region);
+   }
+ 
+--- a/chrome/browser/ui/views/frame/browser_native_widget_aura_linux.cc
++++ b/chrome/browser/ui/views/frame/browser_native_widget_aura_linux.cc
+@@ -13,6 +13,7 @@
+ #include "chrome/browser/ui/views/frame/browser_native_widget_factory.h"
+ #include "chrome/browser/ui/views/frame/browser_view.h"
+ #include "chrome/browser/ui/views/frame/browser_widget.h"
++#include "chrome/browser/ui/views/helium/native_frame_materials.h"
+ #include "chrome/common/pref_names.h"
+ #include "ui/ozone/public/ozone_platform.h"
+ #include "ui/views/widget/widget.h"
+@@ -82,6 +83,12 @@
+     return false;
+   }
+ 
++  // The translucent frame is painted client-side, so it needs the custom frame
++  // regardless of the system title bar preference.
++  if (helium::ShouldUseWaylandFrameOpacity(browser_view())) {
++    return true;
++  }
++
+   // If the platform does not support server side decorations, ignore the user
+   // preference and return true.
+   if (!ui::OzonePlatform::GetInstance()
+--- a/chrome/browser/ui/views/frame/contents_web_view.cc
++++ b/chrome/browser/ui/views/frame/contents_web_view.cc
+@@ -9,6 +9,7 @@
+ #include "chrome/browser/ui/color/chrome_color_id.h"
+ #include "chrome/browser/ui/views/frame/safe_invoke/safe_invoke.h"
+ #include "chrome/browser/ui/views/frame/web_contents_close_handler.h"
++#include "chrome/browser/ui/views/helium/native_frame_materials.h"
+ #include "chrome/browser/ui/views/status_bubble_views.h"
+ #include "components/tabs/public/tab_interface.h"
+ #include "components/web_modal/web_contents_modal_dialog_manager.h"
+@@ -187,27 +188,39 @@
+ #endif
+ 
+ void ContentsWebView::UpdateBackgroundColor() {
+-  const SkColor color = GetColorProvider()->GetColor(
++#if BUILDFLAG(IS_LINUX)
++  // With a translucent Wayland frame, keep a solid backing behind every page,
++  // including transparent HTML and loading or empty views, so the desktop
++  // never shows through the content area.
++  const bool force_opaque = helium::ShouldUseNativeFrameMaterials(this);
++#else
++  const bool force_opaque = false;
++#endif
++  const bool background_visible = background_visible_ || force_opaque;
++  SkColor color = GetColorProvider()->GetColor(
+       is_letterboxing() ? kColorWebContentsBackgroundLetterboxing
+                         : kColorWebContentsBackground);
++  if (force_opaque) {
++    color = SkColorSetA(color, SK_AlphaOPAQUE);
++  }
+   // `color` must be opaque, see RenderWidgetHostView::SetBackgroundColor() for
+   // details.
+   // TODO(crbug.com/456309057): Update this to be a CHECK.
+   if (SkColorGetA(color) != SK_AlphaOPAQUE) {
+     base::debug::DumpWithoutCrashing();
+-    if (background_visible_) {
++    if (background_visible) {
+       return;
+     }
+   }
+ 
+   auto* background_layer = layer()->AsSolidColor();
+   background_layer->SetColor(
+-      SkColor4f::FromColor(background_visible_ ? color : SK_ColorTRANSPARENT));
++      SkColor4f::FromColor(background_visible ? color : SK_ColorTRANSPARENT));
+ 
+   SafeInvoke(web_contents())
+       .Then(&content::WebContents::GetRenderWidgetHostView)
+       .Then(&content::RenderWidgetHostView::SetBackgroundColor,
+-            background_visible_ ? color : SK_ColorTRANSPARENT);
++            background_visible ? color : SK_ColorTRANSPARENT);
+ }
+ 
+ std::unique_ptr<ui::Layer> ContentsWebView::RecreateLayer() {
+--- a/chrome/browser/helium_flag_choices.h
++++ b/chrome/browser/helium_flag_choices.h
+@@ -49,6 +49,18 @@
+ 
+ constexpr const char kMiddleClickPasteEnabledCommandLine[] =
+     "helium-middle-click-paste-enabled";
++// Read in chrome/browser/ui/views/helium/native_frame_materials.cc.
++constexpr const char kHeliumFrameOpacityCommandLine[] = "helium-frame-opacity";
++constexpr const FeatureEntry::Choice kHeliumFrameOpacityChoices[] = {
++    {flags_ui::kGenericExperimentChoiceDefault, "", ""},
++    {"100% (opaque)", kHeliumFrameOpacityCommandLine, "1"},
++    {"90%", kHeliumFrameOpacityCommandLine, "0.9"},
++    {"80%", kHeliumFrameOpacityCommandLine, "0.8"},
++    {"70%", kHeliumFrameOpacityCommandLine, "0.7"},
++    {"50%", kHeliumFrameOpacityCommandLine, "0.5"},
++    {"25%", kHeliumFrameOpacityCommandLine, "0.25"},
++    {"0% (clear frame)", kHeliumFrameOpacityCommandLine, "0"},
++};
+ }  // namespace helium
+ 
+ #endif /* CHROME_BROWSER_HELIUM_FLAG_CHOICES_H_ */
+--- a/chrome/browser/helium_flag_entries.h
++++ b/chrome/browser/helium_flag_entries.h
+@@ -84,6 +84,11 @@
+      "bookmark star, page zoom, PWA install/open, local file access, and more. "
+      "Important actions and indicators will be missing. Helium flag.",
+      kOsDesktop, FEATURE_VALUE_TYPE(features::kHeliumHidePageActions)},
++    {helium::kHeliumFrameOpacityCommandLine, "Wayland frame opacity",
++     "Makes the browser frame translucent on native Wayland. Page content "
++     "stays opaque. Uses Helium's own title bar even if the system title bar "
++     "is enabled. Experimental Helium flag.",
++     kOsLinux, MULTI_VALUE_TYPE(helium::kHeliumFrameOpacityChoices)},
+     // platform
+     {helium::kMiddleClickPasteEnabledCommandLine, "Middle Click Paste",
+      "Controls middle click paste functionality. Helium flag.", kOsLinux,
