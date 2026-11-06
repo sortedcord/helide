@@ -8,3 +8,4 @@ helium/linux/add-error-for-missing-desktop-file.patch
 helium/linux/disable-tab-strokes.patch
 helium/linux/wayland-frame-opacity.patch
 helium/linux/wayland-frame-blur.patch
+helium/linux/wayland-web-content-transparency.patch

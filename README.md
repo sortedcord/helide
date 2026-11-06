@@ -2,8 +2,10 @@
 
 This fork adds a configurable translucent **browser frame** to Helium for Linux
 on Wayland. The tab strip and toolbar background can show the desktop behind the
-window. The webpage, its text and images, and browser controls keep their normal
-opacity. The feature is off by default.
+window. Webpages keep an opaque backing by default. A separate opt-in setting
+allows transparent webpage backgrounds to show through too, while respecting
+the site's CSS. Text, images, and browser controls keep their normal opacity.
+These features are off by default.
 
 The patch targets Helium Linux `0.20.3.1`, shared Helium commit
 `2f81b9cafa38a95071e20de3f9cd6b0aca6d3c65`, and Chromium `156.0.8078.79`.
@@ -25,13 +27,18 @@ The Linux patch is [`patches/helium/linux/wayland-frame-opacity.patch`](patches/
 - Clears Chromium's opaque-region hint for this window so Wayland composites
   its per-pixel alpha correctly.
 - Keeps `ContentsWebView` and the renderer's page background opaque. This
-  includes loading views and pages whose CSS background is transparent.
+  includes loading views and pages whose CSS background is transparent, unless
+  the separate web-content transparency option is enabled.
 - Adds an optional Wayland background-blur request in
   [`wayland-frame-blur.patch`](patches/helium/linux/wayland-frame-blur.patch).
   Ozone binds the compositor's background-effect protocol, owns the effect with
   the surface, and commits blur regions using the same scale conversion as
   input and opaque regions. The outer region follows the client frame shape;
   page content covers the effect with its opaque backing.
+- Adds [web-content transparency](patches/helium/linux/wayland-web-content-transparency.patch).
+  With that option enabled, the browser clears its page backing and renderer
+  default background to transparent. Rounded page shapes are excluded from the
+  frame tint, including in split views. Website CSS is not rewritten.
 
 The shared Helium helper, [`native-frame-materials.patch`](helium-chromium/patches/helium/ui/native-frame-materials.patch), contains the existing frame painting hooks. The Linux patch enables those hooks for this experiment and adds the Wayland-specific behavior.
 
@@ -67,6 +74,7 @@ files without downloading all of Chromium or building:
 ```sh
 python3 scripts/check-frame-opacity-patch.py
 python3 scripts/check-frame-opacity-patch.py --patch helium/linux/wayland-frame-blur.patch
+python3 scripts/check-frame-opacity-patch.py --patch helium/linux/wayland-web-content-transparency.patch
 ```
 
 ## Set the opacity
@@ -88,16 +96,16 @@ The setting is read at startup, so close the existing Helium process before
 relaunching. For the development build, the executable is
 `build/src/out/Default/helium`.
 
-Only the frame background uses this opacity. Web content remains opaque, even
-when a website declares a transparent CSS background. Custom theme background
+Only the frame background uses this opacity. Web content remains opaque unless
+its separate transparency option is enabled. Custom theme background
 images are suppressed while this effect is active, and some floating controls
 may retain their own backgrounds.
 
 ## Enable or disable blur
 
 Open `helium://flags/#helium-frame-blur`, choose **Enabled** or **Disabled**, and
-relaunch. Default makes no blur request. Set frame opacity below 100% so the
-effect can be seen. The launch equivalent is:
+relaunch. Default makes no blur request. Enable frame or web-content transparency
+so the effect can be seen. The launch equivalent for a translucent frame is:
 
 ```sh
 helium --ozone-platform=wayland --helium-frame-opacity=0.8 --helium-frame-blur=1
@@ -134,6 +142,43 @@ global `blur { off }` disables blur even if Helium requests it.
 
 See [niri's blur configuration](https://github.com/niri-wm/niri/wiki/Configuration%3A-Miscellaneous#blur)
 and the [Wayland background-effect protocol](https://wayland.app/protocols/ext-background-effect-v1).
+
+## Transparent website backgrounds
+
+Enable **Transparent web content on Wayland** at
+`helium://flags/#helium-transparent-web-content` and relaunch. Alternatively:
+
+```sh
+helium --ozone-platform=wayland --helium-transparent-web-content=1
+```
+
+Use `--helium-transparent-web-content=0` to keep the normal opaque backing.
+This setting is independent of frame opacity: the frame can remain fully opaque
+while the page has transparent areas. It applies only to normal browser windows
+on native Wayland. Existing binaries need to be rebuilt to include this option.
+
+The feature removes the browser's solid backing behind the page. A page's
+`html`/`body` background must also be transparent for the desktop to show
+through. A transparent child over an opaque parent still shows that parent's
+background. Websites with no background specified may become transparent because
+CSS defaults to transparent. Explicit opaque backgrounds still cover the
+desktop, and translucent CSS colors blend normally. No page CSS is injected,
+and there is no opacity multiplier applied to text or images.
+
+Frame opacity and blur may be combined with this setting:
+
+```sh
+helium --ozone-platform=wayland --helium-frame-opacity=0.8 \
+  --helium-frame-blur=1 --helium-transparent-web-content=1
+```
+
+Open [`docs/web-transparency-demo.html`](docs/web-transparency-demo.html) as a
+local file to check clear, translucent, and opaque page regions. Its button
+switches the page background between transparent and solid without a reload.
+Check it in a restored window, maximized window, and split view; rounded corners
+and gutters should retain the frame tint. The normal opaque backing should
+return when the flag is disabled. Runtime behavior still requires verification
+with a build containing this addition.
 
 ## License
 

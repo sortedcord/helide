@@ -56,10 +56,16 @@ pixels. This also avoids incorrect hints over rounded page corners, vertical
 tabs, and split-view gaps, at a possible cost to compositor occlusion optimization.
 
 On Linux only, `ContentsWebView::UpdateBackgroundColor()` keeps an opaque backing
-and renderer background while this mode is active. That covers pages with
+and renderer background by default while this mode is active. That covers pages with
 transparent CSS backgrounds and pages that are still loading. macOS native
 materials are unaffected. The patch never applies a window or layer opacity
 multiplier to web content.
+
+The optional [`wayland-web-content-transparency.patch`](../patches/helium/linux/wayland-web-content-transparency.patch)
+adds a separate setting to remove that opaque backing and exclude the rounded
+page shapes from the frame tint. With it enabled, CSS background alpha can reach
+the Wayland compositor. See [transparent website backgrounds](../README.md#transparent-website-backgrounds)
+for configuration and a manual demo.
 
 Custom theme images are suppressed by the reused material hooks; the frame uses
 the theme's frame color as its tint. Floating controls may retain their own

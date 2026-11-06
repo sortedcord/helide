@@ -36,7 +36,11 @@ def main():
     parser.add_argument(
         "--patch",
         default=EXPERIMENT,
-        choices=[EXPERIMENT, "helium/linux/wayland-frame-blur.patch"],
+        choices=[
+            EXPERIMENT,
+            "helium/linux/wayland-frame-blur.patch",
+            "helium/linux/wayland-web-content-transparency.patch",
+        ],
     )
     selected = parser.parse_args().patch
     experiment = (ROOT / "patches" / selected).read_text()

@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Helium web transparency check</title>
+<style>
+  html, body { background: transparent; }
+  body { margin: 0; padding: 32px; font: 18px/1.5 system-ui; }
+  header { background: #fff; color: #111; padding: 20px; border-radius: 12px; }
+  main { display: grid; gap: 24px; margin-top: 24px; }
+  section { padding: 24px; border-radius: 12px; border: 2px solid #888; }
+  .clear { background: transparent; color: white; text-shadow: 0 1px 3px black; }
+  .translucent { background: rgb(255 255 255 / 50%); color: black; }
+  .opaque { background: #fff; color: #111; }
+  .parent { background: #245b88; color: white; }
+  .child { background: transparent; padding: 16px; border: 1px dashed white; }
+  button, input { font: inherit; }
+</style>
+<header>
+  <h1>Web transparency check</h1>
+  <p>With transparent web content enabled, the desktop should show through the
+  clear area below. Text and opaque panels should stay solid.</p>
+  <button id="toggle">Switch page background to solid</button>
+</header>
+<main>
+  <section class="clear">
+    <h2>Transparent CSS background</h2>
+    <p>This area should reveal the desktop, without an extra frame tint.</p>
+    <label>Input should still work: <input placeholder="Type here"></label>
+  </section>
+  <section class="translucent">
+    <h2>50% white CSS background</h2>
+    <p>The panel should blend with the desktop; this text should stay solid.</p>
+  </section>
+  <section class="opaque">
+    <h2>Opaque CSS background</h2>
+    <p>No desktop should show through this white panel.</p>
+  </section>
+  <section class="parent">
+    <div class="child">Transparent child over an opaque blue parent: this must
+    show blue, rather than the desktop.</div>
+  </section>
+</main>
+<script>
+  let solid = false;
+  const toggle = document.getElementById('toggle');
+  toggle.addEventListener('click', () => {
+    solid = !solid;
+    document.documentElement.style.background = solid ? '#30343b' : 'transparent';
+    toggle.textContent = solid ? 'Switch page background to transparent' :
+      'Switch page background to solid';
+  });
+</script>
+</html>
