@@ -205,6 +205,26 @@ and an opaque CSS panel after every transition. `--pause 30` keeps the other tab
 active for 30 seconds before returning. It does not use the existing profile or
 change system/browser settings.
 
+## Automatic website transparency: Helium Glass
+
+The companion [Helium Glass extension](extensions/helium-glass/README.md)
+analyzes each website's palette and gives its page backgrounds, cards, and
+neutral gradients different levels of transparency. Text, images, controls,
+and strong accent colors retain their normal opacity. Theme changes and
+dynamically added surfaces are detected automatically.
+
+Enable **Transparent web content on Wayland**, open `helium://extensions`,
+enable **Developer mode**, and **Load unpacked** from
+[`extensions/helium-glass`](extensions/helium-glass). Reload existing pages.
+Click the extension icon for a transparency slider, per-site toggle, contrast
+protection, and global switch. It runs locally and needs no browser rebuild.
+
+The extension is an experimental automatic restyler. Some sites may need a
+lower strength or the site toggle; image backgrounds, pseudo-elements, and
+shadow DOM are not rewritten. See its README for installation, permissions,
+limitations, and tests, or try the included
+[surface demo](extensions/helium-glass/demo.html).
+
 ## License
 
 Helium's original license and attribution are preserved. Helium-specific code

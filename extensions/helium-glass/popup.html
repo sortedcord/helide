@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Helium Glass</title>
+  <link rel="stylesheet" href="popup.css">
+  <script src="shared.js" defer></script>
+  <script src="popup.js" defer></script>
+</head>
+<body>
+  <header><img src="icons/48.png" width="40" height="40" alt=""><div><h1>Helium Glass</h1><p>A little more atmosphere.</p></div><label class="switch" title="Enable on all allowed websites"><input id="globalToggle" type="checkbox" aria-label="Enable Helium Glass"><span></span></label></header>
+  <main>
+    <section class="site"><div><p class="eyebrow">THIS WEBSITE</p><h2 id="siteName">Loading…</h2></div><label class="switch"><input id="siteToggle" type="checkbox" aria-label="Enable on this website"><span></span></label></section>
+    <div id="status" class="status" role="status" aria-live="polite">Reading the page palette…</div>
+    <section class="setting"><div class="row"><label for="transparency">Transparency</label><output id="amount" for="transparency">65%</output></div><input id="transparency" type="range" min="0" max="100" step="1"><div class="ends"><span>Solid</span><span>Airy</span></div></section>
+    <label class="contrast"><input id="protectContrast" type="checkbox"><span><strong>Protect surface contrast</strong><small>Keep text-bearing cards and overlays more solid.</small></span></label>
+    <button id="rescan" type="button">Reanalyze this page <span aria-hidden="true">↻</span></button>
+    <p class="hint">Desktop transparency requires Helium’s <strong>Transparent web content on Wayland</strong> setting.</p>
+    <p id="error" class="error" role="alert" hidden></p>
+  </main>
+  <footer>Analyzed locally. No uploads. No remote styles.</footer>
+</body>
+</html>
