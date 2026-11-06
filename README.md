@@ -1,11 +1,11 @@
-# Helium: Wayland frame opacity experiment
+# Helium: With Transparency
 
-This fork adds a configurable translucent **browser frame** to Helium for Linux
-on Wayland. The tab strip and toolbar background can show the desktop behind the
-window. Webpages keep an opaque backing by default. A separate opt-in setting
-allows transparent webpage backgrounds to show through too, while respecting
-the site's CSS. Text, images, and browser controls keep their normal opacity.
-These features are off by default.
+This fork adds configurable transparency and compositor blur to Helium for Linux
+on Wayland, with separate controls for browser UI opacity, blur, and website
+transparency. The tab strip, toolbar, and transparent webpage backgrounds can
+show the desktop behind the window. Webpages keep an opaque backing by default;
+website transparency is opt-in and respects the site's CSS. Text, images, and
+browser controls keep their normal opacity. These features are off by default.
 
 ## Demo
 
@@ -16,20 +16,20 @@ Animated preview — click it to [watch the full-resolution recording](docs/medi
 The patch targets Helium Linux `0.20.3.1`, shared Helium commit
 `2f81b9cafa38a95071e20de3f9cd6b0aca6d3c65`, and Chromium `156.0.8078.79`.
 It requires a native Wayland session and client side browser decorations. The
-compositor blends the frame's alpha with the desktop. An optional blur request
+compositor blends transparent pixels with the desktop. An optional blur request
 is available on compositors supporting `ext-background-effect-v1`.
 
 ## What changed
 
 The Linux patch is [`patches/helium/linux/wayland-frame-opacity.patch`](patches/helium/linux/wayland-frame-opacity.patch), registered in `patches/series`.
 
-- Adds the **Wayland frame opacity** entry to `helium://flags` and the launch
+- Adds an opacity control to `helium://flags` and the launch
   switch `--helium-frame-opacity=VALUE`.
-- Reuses Helium's native frame material hooks to let the frame's backgrounds
+- Reuses Helium's native material hooks to let the browser UI backgrounds
   show through. On Linux, ordinary browser windows paint one theme-colored
-  frame tint at the requested alpha. Caption text and icons stay opaque.
+  tint at the requested alpha. Caption text and icons stay opaque.
 - Enables client side decorations for the affected window. This is needed to
-  draw the translucent frame when system decorations are selected.
+  draw the translucent browser UI when system decorations are selected.
 - Clears Chromium's opaque-region hint for this window so Wayland composites
   its per-pixel alpha correctly.
 - Keeps `ContentsWebView` and the renderer's page background opaque. This
@@ -39,14 +39,14 @@ The Linux patch is [`patches/helium/linux/wayland-frame-opacity.patch`](patches/
   [`wayland-frame-blur.patch`](patches/helium/linux/wayland-frame-blur.patch).
   Ozone binds the compositor's background-effect protocol, owns the effect with
   the surface, and commits blur regions using the same scale conversion as
-  input and opaque regions. The outer region follows the client frame shape;
+  input and opaque regions. The outer region follows the window shape;
   page content covers the effect with its opaque backing.
 - Adds [web-content transparency](patches/helium/linux/wayland-web-content-transparency.patch).
   With that option enabled, the browser clears its page backing and renderer
   default background to transparent. Rounded page shapes are excluded from the
-  frame tint, including in split views. Website CSS is not rewritten.
+  browser UI tint, including in split views. Website CSS is not rewritten.
 
-The shared Helium helper, [`native-frame-materials.patch`](helium-chromium/patches/helium/ui/native-frame-materials.patch), contains the existing frame painting hooks. The Linux patch enables those hooks for this experiment and adds the Wayland-specific behavior.
+The shared Helium [native materials patch](helium-chromium/patches/helium/ui/native-frame-materials.patch) contains the existing UI painting hooks. The Linux patches extend those hooks with Wayland compositing and website transparency.
 
 ## Build
 
@@ -87,7 +87,7 @@ python3 scripts/check-frame-opacity-patch.py --patch helium/linux/wayland-web-co
 ## Set the opacity
 
 Open `helium://flags/#helium-frame-opacity`, choose an opacity, and relaunch the
-browser. Available values range from fully opaque to clear. At `0`, the frame
+browser. Available values range from fully opaque to clear. At `0`, the browser UI
 background tint is invisible while text, icons, and controls remain visible.
 The default choice is fully opaque.
 
@@ -103,7 +103,7 @@ The setting is read at startup, so close the existing Helium process before
 relaunching. For the development build, the executable is
 `build/src/out/Default/helium`.
 
-Only the frame background uses this opacity. Web content remains opaque unless
+Only the browser UI background uses this opacity. Web content remains opaque unless
 its separate transparency option is enabled. Custom theme background
 images are suppressed while this effect is active, and some floating controls
 may retain their own backgrounds.
@@ -111,8 +111,8 @@ may retain their own backgrounds.
 ## Enable or disable blur
 
 Open `helium://flags/#helium-frame-blur`, choose **Enabled** or **Disabled**, and
-relaunch. Default makes no blur request. Enable frame or web-content transparency
-so the effect can be seen. The launch equivalent for a translucent frame is:
+relaunch. Default makes no blur request. Enable browser UI or website transparency
+so the effect can be seen. For example:
 
 ```sh
 helium --ozone-platform=wayland --helium-frame-opacity=0.8 --helium-frame-blur=1
@@ -121,11 +121,10 @@ helium --ozone-platform=wayland --helium-frame-opacity=0.8 --helium-frame-blur=1
 Use `--helium-frame-blur=0` to remove Helium's request. A compositor window rule
 that forces blur can override that choice. Fullscreen, app, popup, devtools, and
 picture-in-picture windows do not request this effect. Unsupported compositors
-keep the translucent frame without blur.
+keep transparency without blur.
 
-This is a source change requiring a new build; previously packaged binaries do
-not contain the blur option. Patch application is checked without compiling;
-compilation and visual behavior of the blur addition are not yet verified.
+These controls require a build of this fork; standard Helium binaries do not
+include them.
 
 ### Blur strength on niri
 
@@ -160,7 +159,7 @@ helium --ozone-platform=wayland --helium-transparent-web-content=1
 ```
 
 Use `--helium-transparent-web-content=0` to keep the normal opaque backing.
-This setting is independent of frame opacity: the frame can remain fully opaque
+This setting is independent of browser UI opacity: the UI can remain fully opaque
 while the page has transparent areas. It applies only to normal browser windows
 on native Wayland. Existing binaries need to be rebuilt to include this option.
 
@@ -172,7 +171,7 @@ CSS defaults to transparent. Explicit opaque backgrounds still cover the
 desktop, and translucent CSS colors blend normally. No page CSS is injected,
 and there is no opacity multiplier applied to text or images.
 
-Frame opacity and blur may be combined with this setting:
+Browser UI opacity and blur may be combined with this setting:
 
 ```sh
 helium --ozone-platform=wayland --helium-frame-opacity=0.8 \
@@ -188,7 +187,7 @@ Open [`docs/web-transparency-demo.html`](docs/web-transparency-demo.html) as a
 local file to check clear, translucent, and opaque page regions. Its button
 switches the page background between transparent and solid without a reload.
 Check it in a restored window, maximized window, and split view; rounded corners
-and gutters should retain the frame tint. The normal opaque backing should
+and gutters should retain the browser UI tint. The normal opaque backing should
 return when the flag is disabled.
 
 For an automated lifecycle regression check, run these commands on a Wayland
