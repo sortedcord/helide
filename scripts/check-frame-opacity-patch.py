@@ -40,6 +40,7 @@ def main():
             EXPERIMENT,
             "helium/linux/wayland-frame-blur.patch",
             "helium/linux/wayland-web-content-transparency.patch",
+            "helium/linux/wayland-web-content-lifecycle.patch",
         ],
     )
     selected = parser.parse_args().patch

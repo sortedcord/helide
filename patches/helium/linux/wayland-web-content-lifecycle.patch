@@ -1,0 +1,61 @@
+--- a/chrome/browser/ui/views/frame/contents_web_view.h
++++ b/chrome/browser/ui/views/frame/contents_web_view.h
+@@ -64,6 +64,7 @@
+   void SetWebContents(content::WebContents* web_contents) override;
+ 
+   // content::WebContentsObserver overrides:
++  void PrimaryPageChanged(content::Page& page) override;
+   // Overridden to track physical interactions (mouse/touch) on the WebContents.
+   // This allows the browser to force focus synchronization in split view even
+   // when native OS focus gets stuck on a different window (like a permission
+--- a/chrome/browser/ui/views/frame/contents_web_view.cc
++++ b/chrome/browser/ui/views/frame/contents_web_view.cc
+@@ -150,6 +150,11 @@
+ }
+ 
+ void ContentsWebView::SetWebContents(content::WebContents* web_contents) {
++  if (web_contents && helium::ShouldAllowWaylandWebTransparency(this)) {
++    // Store the default on the tab before attaching it. Unlike a one-time
++    // RenderWidgetHostView update, this reaches future renderers while hidden.
++    web_contents->SetPageBaseBackgroundColor(SK_ColorTRANSPARENT);
++  }
+   views::WebView::SetWebContents(web_contents);
+   if (web_contents == nullptr) {
+     status_bubble_.reset();
+@@ -160,6 +165,9 @@
+     return;
+   }
+ 
++  if (GetWidget() && helium::ShouldAllowWaylandWebTransparency(this)) {
++    UpdateBackgroundColor();
++  }
+   UpdateIsBlockedByModal();
+ 
+   if (!status_bubble_) {
+@@ -172,6 +180,16 @@
+   SafeInvoke(
+       web_modal::WebContentsModalDialogManager::FromWebContents(web_contents))
+       .Then(&web_modal::WebContentsModalDialogManager::UpdateDialogHost);
++}
++
++void ContentsWebView::PrimaryPageChanged(content::Page& page) {
++  views::WebView::PrimaryPageChanged(page);
++  if (GetWidget() && helium::ShouldAllowWaylandWebTransparency(this)) {
++    // Reapply the view backing after navigation, prerender activation or
++    // BFCache restore, which can replace the primary renderer without a new
++    // WebView.
++    UpdateBackgroundColor();
++  }
+ }
+ 
+ #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+@@ -192,6 +210,9 @@
+ 
+ void ContentsWebView::UpdateBackgroundColor() {
+   if (helium::ShouldAllowWaylandWebTransparency(this)) {
++    if (web_contents()) {
++      web_contents()->SetPageBaseBackgroundColor(SK_ColorTRANSPARENT);
++    }
+     // Clear the browser backing and Blink's default canvas. CSS background
+     // painting is untouched, so opaque site backgrounds still cover the desktop
+     // and transparent elements reveal their painted ancestors normally.

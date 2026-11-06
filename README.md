@@ -75,6 +75,7 @@ files without downloading all of Chromium or building:
 python3 scripts/check-frame-opacity-patch.py
 python3 scripts/check-frame-opacity-patch.py --patch helium/linux/wayland-frame-blur.patch
 python3 scripts/check-frame-opacity-patch.py --patch helium/linux/wayland-web-content-transparency.patch
+python3 scripts/check-frame-opacity-patch.py --patch helium/linux/wayland-web-content-lifecycle.patch
 ```
 
 ## Set the opacity
@@ -172,13 +173,32 @@ helium --ozone-platform=wayland --helium-frame-opacity=0.8 \
   --helium-frame-blur=1 --helium-transparent-web-content=1
 ```
 
+The transparent default is stored on each tab's `WebContents`, so future
+renderers inherit it even while the tab is hidden. The page backing is also
+reapplied when switching tabs and when the primary page changes. See
+[`wayland-web-content-lifecycle.patch`](patches/helium/linux/wayland-web-content-lifecycle.patch).
+
 Open [`docs/web-transparency-demo.html`](docs/web-transparency-demo.html) as a
 local file to check clear, translucent, and opaque page regions. Its button
 switches the page background between transparent and solid without a reload.
 Check it in a restored window, maximized window, and split view; rounded corners
 and gutters should retain the frame tint. The normal opaque backing should
-return when the flag is disabled. Runtime behavior still requires verification
-with a build containing this addition.
+return when the flag is disabled.
+
+For an automated lifecycle regression check, run these commands on a Wayland
+desktop after building. They require Python's Pillow package and the matching
+ChromeDriver from the build:
+
+```sh
+python3 scripts/check-web-transparency-lifecycle.py
+python3 scripts/check-web-transparency-lifecycle.py --opaque
+```
+
+The check opens a temporary browser profile with local data pages, switches to
+an opaque tab and back, reloads, and navigates again. It checks screenshot alpha
+and an opaque CSS panel after every transition. `--pause 30` keeps the other tab
+active for 30 seconds before returning. It does not use the existing profile or
+change system/browser settings.
 
 ## License
 
