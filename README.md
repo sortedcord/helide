@@ -126,8 +126,10 @@ can take effect. Flags and switches are read at startup.
 ## Slide pages when swiping
 
 On native Wayland, a two-finger horizontal swipe on the touchpad slides the page
-with your fingers and reveals a snapshot of the previous (or next) page beneath
-it, with a soft shadow on the moving page's edge, like Safari on macOS. Release
+with your fingers, like Safari on macOS. The pages behave as a stack: going back,
+the current page slides to the right and uncovers the previous page, which stays
+still; going forward, the next page slides in from the right over the current
+page, which stays still. A soft shadow falls from the moving page's edge. Release
 past the commit point to navigate, or earlier to snap back. The browser chrome
 stays in place; only the page area moves. Without this, Chromium only shows a
 small arrow and then navigates.

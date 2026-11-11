@@ -404,7 +404,7 @@
      "tracing_controller.h",
 --- /dev/null
 +++ b/content/browser/web_contents/aura/swipe_page_transition.cc
-@@ -0,0 +1,503 @@
+@@ -0,0 +1,505 @@
 +// Copyright 2026 The Helium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -445,11 +445,7 @@
 +// Minimum time between two captures of the same history entry.
 +constexpr auto kMinCaptureInterval = base::Milliseconds(750);
 +
-+// How far, as a fraction of the page width, the destination page is offset
-+// when the swipe starts. It slides to 0 as the swipe progresses.
-+constexpr float kPreviewParallax = 0.28f;
-+
-+// Strength of the dim on the destination page at the start of the swipe.
++// Strength of the dim on the page underneath while it is covered.
 +constexpr float kPreviewDim = 0.22f;
 +
 +constexpr int kShadowWidth = 28;
@@ -723,25 +719,29 @@
 +  backdrop_layer_.SetColor(SkColor4f::FromColor(fallback));
 +  root_layer_.Add(&backdrop_layer_);
 +
-+  preview_ = std::make_unique<SnapshotPaintLayer>(size, destination, fallback);
-+  root_layer_.Add(preview_->layer());
++  // Back: the current page is on top, the previous page underneath.
++  // Forward: the next page is on top, the current page underneath.
++  under_ = std::make_unique<SnapshotPaintLayer>(
++      size, is_back_ ? destination : current, fallback);
++  root_layer_.Add(under_->layer());
 +
 +  dim_layer_.SetBounds(gfx::Rect(size));
 +  dim_layer_.SetColor(SkColors::kBlack);
-+  dim_layer_.SetOpacity(kPreviewDim);
 +  root_layer_.Add(&dim_layer_);
 +
-+  current_container_.SetBounds(gfx::Rect(size));
-+  root_layer_.Add(&current_container_);
++  over_container_.SetBounds(gfx::Rect(size));
++  root_layer_.Add(&over_container_);
 +
-+  current_ = std::make_unique<SnapshotPaintLayer>(size, current, fallback);
-+  current_container_.Add(current_->layer());
++  over_ = std::make_unique<SnapshotPaintLayer>(
++      size, is_back_ ? current : destination, fallback);
++  over_container_.Add(over_->layer());
 +
-+  const gfx::Rect shadow_bounds(is_back_ ? -kShadowWidth : size.width(), 0,
-+                                kShadowWidth, size.height());
++  // The sliding page always casts its shadow on the page beneath from its
++  // left edge.
 +  shadow_ = std::make_unique<ShadowPaintLayer>(
-+      shadow_bounds, /*darkest_on_right=*/is_back_);
-+  current_container_.Add(shadow_->layer());
++      gfx::Rect(-kShadowWidth, 0, kShadowWidth, size.height()),
++      /*darkest_on_right=*/true);
++  over_container_.Add(shadow_->layer());
 +
 +  ApplyProgress(0.f);
 +}
@@ -766,18 +766,20 @@
 +void SwipePageTransition::ApplyProgress(float progress) {
 +  progress_ = progress;
 +  const float w = static_cast<float>(width());
-+  const float direction = is_back_ ? 1.f : -1.f;
++  // |progress| is 0 with the current page showing and 1 with the destination
++  // page fully showing. Only the page on top moves.
++  const float over_offset = is_back_ ? progress * w : (1.f - progress) * w;
++  gfx::Transform over_transform;
++  over_transform.Translate(over_offset, 0);
++  over_container_.SetTransform(over_transform);
 +
-+  gfx::Transform current_transform;
-+  current_transform.Translate(direction * progress * w, 0);
-+  current_container_.SetTransform(current_transform);
-+
-+  gfx::Transform preview_transform;
-+  preview_transform.Translate(-direction * (1.f - progress) * kPreviewParallax * w,
-+                              0);
-+  preview_->layer()->SetTransform(preview_transform);
-+  dim_layer_.SetTransform(preview_transform);
-+  dim_layer_.SetOpacity(kPreviewDim * (1.f - progress));
++  // The page underneath darkens as it gets covered and lightens as it is
++  // uncovered.
++  const float covered = is_back_ ? 1.f - progress : progress;
++  dim_layer_.SetOpacity(kPreviewDim * covered);
++  // The shadow strip sits just outside the sliding page's left edge. When the
++  // page is at the screen edge that strip would poke into view, so fade it out.
++  shadow_->layer()->SetOpacity(std::min(1.f, covered * 8.f));
 +}
 +
 +void SwipePageTransition::StartAnimation(base::TimeDelta duration) {
@@ -910,7 +912,7 @@
 +}  // namespace content
 --- /dev/null
 +++ b/content/browser/web_contents/aura/swipe_page_transition.h
-@@ -0,0 +1,177 @@
+@@ -0,0 +1,181 @@
 +// Copyright 2026 The Helium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -1074,10 +1076,14 @@
 +
 +  ui::LayerNotDrawn root_layer_;
 +  ui::LayerSolidColor backdrop_layer_;
-+  std::unique_ptr<SnapshotPaintLayer> preview_;
++  // The pages form a stack. The page underneath stays still; the page on top
++  // slides. Going back, the current page is on top and slides out to the
++  // right, uncovering the previous page. Going forward, the next page is on
++  // top and slides in from the right over the current page.
++  std::unique_ptr<SnapshotPaintLayer> under_;
 +  ui::LayerSolidColor dim_layer_;
-+  ui::LayerNotDrawn current_container_;
-+  std::unique_ptr<SnapshotPaintLayer> current_;
++  ui::LayerNotDrawn over_container_;
++  std::unique_ptr<SnapshotPaintLayer> over_;
 +  std::unique_ptr<ShadowPaintLayer> shadow_;
 +
 +  std::unique_ptr<gfx::LinearAnimation> animation_;
