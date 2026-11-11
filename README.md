@@ -50,6 +50,10 @@ The Linux patch is [`patches/helium/linux/wayland-frame-opacity.patch`](patches/
   transparency, stored as per-profile prefs, in
   [`wayland-settings.patch`](patches/helium/linux/wayland-settings.patch). Changes
   apply to open windows without a relaunch.
+- Adds a Safari-style [page-slide swipe for history navigation](#slide-pages-when-swiping)
+  on the touchpad, in
+  [`wayland-swipe-page-preview.patch`](patches/helium/linux/wayland-swipe-page-preview.patch),
+  with a toggle in **Settings → Behavior**.
 
 The shared Helium [native materials patch](helium-chromium/patches/helium/ui/native-frame-materials.patch) contains the existing UI painting hooks. The Linux patches extend those hooks with Wayland compositing and website transparency.
 
@@ -88,12 +92,15 @@ python3 scripts/check-frame-opacity-patch.py --patch helium/linux/wayland-frame-
 python3 scripts/check-frame-opacity-patch.py --patch helium/linux/wayland-web-content-transparency.patch
 python3 scripts/check-frame-opacity-patch.py --patch helium/linux/wayland-web-content-lifecycle.patch
 python3 scripts/check-frame-opacity-patch.py --patch helium/linux/wayland-settings.patch
+python3 scripts/check-frame-opacity-patch.py --patch helium/linux/wayland-swipe-page-preview.patch
 ```
 
 ## Settings
 
 On native Wayland, **Settings → Appearance** shows three controls, below the
-rounded-frame option. They are hidden on X11 and other platforms.
+rounded-frame option, and **Settings → Behavior** shows the page-slide swipe
+toggle (see [Slide pages when swiping](#slide-pages-when-swiping)). They are
+hidden on X11 and other platforms.
 
 | Control | Range | Default |
 |---|---|---|
@@ -115,6 +122,36 @@ Leave a flag on **Default** to use the Settings value. If an opacity flag was
 previously enabled in `helium://flags`, reset it to Default so the Settings slider
 can take effect. Flags and switches are read at startup.
 
+
+## Slide pages when swiping
+
+On native Wayland, a two-finger horizontal swipe on the touchpad slides the page
+with your fingers and reveals a snapshot of the previous (or next) page beneath
+it, with a soft shadow on the moving page's edge, like Safari on macOS. Release
+past the commit point to navigate, or earlier to snap back. The browser chrome
+stays in place; only the page area moves. Without this, Chromium only shows a
+small arrow and then navigates.
+
+Turn it off in **Settings → Behavior → Slide pages when swiping** (on by
+default; the option is hidden outside Wayland). It is stored as the per-profile
+pref `helium.browser.wayland_swipe_page_preview`. It affects touchpad swipes
+only; touchscreen swipes and pull-to-refresh are unchanged, and Chromium's own
+swipe-between-pages option still gates the gesture.
+
+How it works, and its limits:
+
+- A snapshot of a page is captured when you navigate away from it, and again when
+  a swipe starts. Snapshots are kept in a memory-bounded cache (about 190 MB for
+  the whole browser) and are dropped with their tab. Same-page (fragment or
+  `pushState`) navigations cannot be captured reliably after the fact, so such an
+  entry only has a snapshot if you swiped away from it. When there is none, the
+  page slides over a plain themed background.
+- The page moves at 0.3× the swipe distance and follows your fingers across its
+  full width. Whether a release navigates is still Chromium's rule (a fixed swipe
+  distance, 30% of the screen size), not a fraction of how far the page has moved.
+- While you swipe, the page area is drawn from snapshots over a solid themed
+  background, so translucency is not shown inside the page area until the swipe
+  ends.
 
 ## Set the opacity
 

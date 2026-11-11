@@ -11,3 +11,4 @@ helium/linux/wayland-frame-blur.patch
 helium/linux/wayland-web-content-transparency.patch
 helium/linux/wayland-web-content-lifecycle.patch
 helium/linux/wayland-settings.patch
+helium/linux/wayland-swipe-page-preview.patch

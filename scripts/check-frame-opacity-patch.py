@@ -42,6 +42,7 @@ def main():
             "helium/linux/wayland-web-content-transparency.patch",
             "helium/linux/wayland-web-content-lifecycle.patch",
             "helium/linux/wayland-settings.patch",
+            "helium/linux/wayland-swipe-page-preview.patch",
         ],
     )
     selected = parser.parse_args().patch
@@ -66,6 +67,11 @@ def main():
         raise RuntimeError("Experimental patch is missing from patches/series")
 
     created = {path for path, text in previous if text.startswith("--- /dev/null")}
+    # Files the selected patch itself creates have no upstream baseline.
+    new_files = {
+        path for path, text in sections(experiment) if text.startswith("--- /dev/null")
+    }
+    created |= new_files
     version = (ROOT / "helium-chromium/chromium_version.txt").read_text().strip()
     with tempfile.TemporaryDirectory(prefix="helium-frame-opacity-") as tmp:
         work = pathlib.Path(tmp)
@@ -84,12 +90,18 @@ def main():
             (work / path).parent.mkdir(parents=True, exist_ok=True)
         for _, text in previous:
             apply(work, text)
-        baseline = {path: (work / path).read_bytes() for path in targets}
+        baseline = {
+            path: (work / path).read_bytes()
+            for path in targets - new_files
+        }
         apply(work, experiment)
         apply(work, experiment, reverse=True)
         for path, original in baseline.items():
             if (work / path).read_bytes() != original:
                 raise RuntimeError(f"Patch round trip changed {path}")
+        for path in new_files:
+            if (work / path).exists():
+                raise RuntimeError(f"Reversing the patch left new file {path}")
     print(
         f"PASS: {selected}, Chromium {version}, {len(targets)} files, "
         f"{len(previous)} existing patch sections; zero-fuzz apply/reverse. "

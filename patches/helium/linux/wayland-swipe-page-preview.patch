@@ -1,0 +1,1191 @@
+--- a/chrome/browser/resources/settings/appearance_page/appearance_behavior_page.html
++++ b/chrome/browser/resources/settings/appearance_page/appearance_behavior_page.html
+@@ -36,4 +36,12 @@
+       label="$i18n{allowSplitViewDragAndDrop}">
+   </settings-toggle-button>
+ 
++  <template is="dom-if" if="[[showWaylandOptions_]]">
++    <settings-toggle-button class="hr" id="waylandSwipePagePreview"
++        pref-key="helium.browser.wayland_swipe_page_preview"
++        label="$i18n{waylandSwipePagePreview}"
++        sub-label="$i18n{waylandSwipePagePreviewDescription}">
++    </settings-toggle-button>
++  </template>
++
+ </settings-section>
+--- a/chrome/browser/resources/settings/appearance_page/appearance_behavior_page.ts
++++ b/chrome/browser/resources/settings/appearance_page/appearance_behavior_page.ts
+@@ -6,6 +6,8 @@
+ import '../settings_page/settings_section.js';
+ 
+ import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
++
++import {loadTimeData} from '../i18n_setup.js';
+ 
+ import {getTemplate} from './appearance_behavior_page.html.js';
+ 
+@@ -17,6 +19,18 @@
+   static get template() {
+     return getTemplate();
+   }
++
++  static get properties() {
++    return {
++      // Wayland-only options (touchpad page-slide swipe navigation).
++      showWaylandOptions_: {
++        type: Boolean,
++        value: () => loadTimeData.getBoolean('showWaylandTransparencyOptions'),
++      },
++    };
++  }
++
++  declare private showWaylandOptions_: boolean;
+ }
+ 
+ declare global {
+--- a/chrome/browser/ui/views/chrome_browser_main_extra_parts_views_linux.cc
++++ b/chrome/browser/ui/views/chrome_browser_main_extra_parts_views_linux.cc
+@@ -7,8 +7,13 @@
+ #include "base/functional/bind.h"
+ #include "base/notreached.h"
+ #include "chrome/browser/lifetime/application_lifetime_desktop.h"
++#include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/themes/theme_service_aura_linux.h"
+ #include "chrome/browser/ui/views/theme_profile_key.h"
++#include "chrome/common/pref_names.h"
++#include "components/prefs/pref_service.h"
++#include "content/public/browser/swipe_page_preview.h"
++#include "content/public/browser/web_contents.h"
+ #include "ui/base/buildflags.h"
+ #include "ui/base/cursor/cursor_factory.h"
+ #include "ui/base/ime/input_method.h"
+@@ -44,6 +49,18 @@
+   }
+ };
+ 
++// Helium: whether a touchpad swipe between pages should slide the page and
++// show the destination page underneath it (native Wayland only).
++bool IsSwipePagePreviewEnabled(content::WebContents* web_contents) {
++  if (!ui::OzonePlatform::RunningOnWaylandForTest()) {
++    return false;
++  }
++  Profile* profile =
++      Profile::FromBrowserContext(web_contents->GetBrowserContext());
++  return profile &&
++         profile->GetPrefs()->GetBoolean(prefs::kHeliumWaylandSwipePagePreview);
++}
++
+ }  // namespace
+ 
+ ChromeBrowserMainExtraPartsViewsLinux::ChromeBrowserMainExtraPartsViewsLinux() =
+@@ -76,6 +93,8 @@
+ void ChromeBrowserMainExtraPartsViewsLinux::PostCreateMainMessageLoop() {
+   ChromeBrowserMainExtraPartsViews::PostCreateMainMessageLoop();
+ 
++  content::SwipePagePreview::SetEnabledCallback(&IsSwipePagePreviewEnabled);
++
+   if (auto* linux_ui = ui::LinuxUi::instance()) {
+     linux_ui->SetShutdownCb(base::BindOnce([] {
+       chrome::SessionEnding();
+--- a/content/browser/BUILD.gn
++++ b/content/browser/BUILD.gn
+@@ -2170,6 +2170,8 @@
+     "wake_lock/wake_lock_service_impl.h",
+     "web_contents/aura/gesture_nav_simple.cc",
+     "web_contents/aura/gesture_nav_simple.h",
++    "web_contents/aura/swipe_page_transition.cc",
++    "web_contents/aura/swipe_page_transition.h",
+     "web_contents/aura/types.cc",
+     "web_contents/aura/types.h",
+     "web_contents/drag_source_document_tracker.cc",
+@@ -3525,6 +3527,8 @@
+       "renderer_host/render_widget_host_view_aura.h",
+       "web_contents/aura/gesture_nav_simple.cc",
+       "web_contents/aura/gesture_nav_simple.h",
++      "web_contents/aura/swipe_page_transition.cc",
++      "web_contents/aura/swipe_page_transition.h",
+       "web_contents/web_contents_view_aura.cc",
+       "web_contents/web_contents_view_aura.h",
+     ]
+--- a/content/browser/web_contents/aura/gesture_nav_simple.cc
++++ b/content/browser/web_contents/aura/gesture_nav_simple.cc
+@@ -4,6 +4,7 @@
+ 
+ #include "content/browser/web_contents/aura/gesture_nav_simple.h"
+ 
++#include <algorithm>
+ #include <utility>
+ 
+ #include "base/memory/raw_ptr.h"
+@@ -12,10 +13,12 @@
+ #include "components/vector_icons/vector_icons.h"
+ #include "content/browser/renderer_host/navigation_controller_impl.h"
+ #include "content/browser/renderer_host/overscroll_controller.h"
++#include "content/browser/web_contents/aura/swipe_page_transition.h"
+ #include "content/browser/web_contents/aura/types.h"
+ #include "content/browser/web_contents/web_contents_impl.h"
+ #include "content/public/browser/overscroll_configuration.h"
+ #include "content/public/browser/preloading.h"
++#include "content/public/browser/swipe_page_preview.h"
+ #include "ui/aura/window.h"
+ #include "ui/base/ui_base_features.h"
+ #include "ui/compositor/layer_delegate.h"
+@@ -82,6 +85,9 @@
+ constexpr gfx::Tween::Type kAbortAnimationTweenType =
+     gfx::Tween::FAST_OUT_SLOW_IN;
+ constexpr auto kAbortAnimationDuration = base::Milliseconds(300);
++
++// How far the page moves per DIP of touchpad swipe. Lower is slower.
++constexpr float kSwipePageGain = 0.3f;
+ 
+ bool ShouldNavigateForward(NavigationController* controller,
+                            OverscrollMode mode) {
+@@ -460,12 +466,109 @@
+ }
+ 
+ GestureNavSimple::GestureNavSimple(WebContentsImpl* web_contents)
+-    : web_contents_(web_contents) {}
++    : web_contents_(web_contents),
++      snapshot_capturer_(std::make_unique<SwipeSnapshotCapturer>(web_contents)) {
++}
+ 
+ GestureNavSimple::~GestureNavSimple() {}
+ 
+ void GestureNavSimple::OnAffordanceAnimationEnded() {
+   affordance_ = nullptr;
++}
++
++bool GestureNavSimple::ShouldUsePagePreview(OverscrollSource source) const {
++  return source == OverscrollSource::TOUCHPAD &&
++         (mode_ == OVERSCROLL_EAST || mode_ == OVERSCROLL_WEST) &&
++         SwipePagePreview::IsEnabled(web_contents_);
++}
++
++void GestureNavSimple::StartPagePreview() {
++  page_transition_pending_ = true;
++  pending_delta_ = 0.f;
++  NavigationEntry* current_entry =
++      web_contents_->GetController().GetLastCommittedEntry();
++  pending_entry_id_ = current_entry ? current_entry->GetUniqueID() : 0;
++  SwipeSnapshotCapturer::CaptureCurrentPage(
++      web_contents_,
++      base::BindOnce(&GestureNavSimple::OnCurrentPageCaptured,
++                     page_transition_weak_factory_.GetWeakPtr(),
++                     ++page_transition_generation_));
++}
++
++void GestureNavSimple::OnCurrentPageCaptured(int generation,
++                                             SkBitmap current) {
++  if (!page_transition_pending_ || generation != page_transition_generation_) {
++    // The gesture ended before the snapshot arrived.
++    return;
++  }
++  page_transition_pending_ = false;
++
++  // This capture is taken while the page is stable, so it is a reliable
++  // snapshot of the entry being left (unlike captures for same-document
++  // navigations). Keep it for the way back.
++  if (pending_entry_id_ && !current.drawsNothing()) {
++    SwipeSnapshotCache::GetInstance().Put(web_contents_, pending_entry_id_,
++                                          current);
++  }
++
++  NavigationControllerImpl& controller = web_contents_->GetController();
++  const bool is_back = GetDirectionFromMode(mode_) == NavigationDirection::BACK;
++  NavigationEntry* destination = controller.GetEntryAtIndex(
++      controller.GetLastCommittedEntryIndex() + (is_back ? -1 : 1));
++  if (current.drawsNothing() || !destination) {
++    CreateAffordance();
++    if (affordance_ && completion_threshold_ > 0.f) {
++      affordance_->SetDragProgress(pending_delta_ / completion_threshold_);
++    }
++    return;
++  }
++
++  aura::Window* window = web_contents_->GetNativeView();
++  page_transition_ = std::make_unique<SwipePageTransition>(
++      web_contents_, is_back, window->bounds(), current,
++      SwipeSnapshotCache::GetInstance().Get(web_contents_,
++                                            destination->GetUniqueID()),
++      base::BindOnce(&GestureNavSimple::OnPageTransitionFinished,
++                     page_transition_weak_factory_.GetWeakPtr()));
++  page_transition_->Attach(window->layer());
++  UpdatePagePreview(pending_delta_);
++}
++
++void GestureNavSimple::UpdatePagePreview(float delta) {
++  if (!page_transition_ || completion_threshold_ <= 0.f) {
++    return;
++  }
++  page_transition_->SetDragOffset(delta * kSwipePageGain);
++}
++
++void GestureNavSimple::OnPageTransitionFinished() {
++  // Called from inside the transition's animation; destroy it afterwards.
++  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
++      FROM_HERE, base::BindOnce(&GestureNavSimple::DestroyPageTransition,
++                                page_transition_weak_factory_.GetWeakPtr()));
++}
++
++void GestureNavSimple::DestroyPageTransition() {
++  // A new gesture may have started since the request was posted.
++  if (page_transition_ && page_transition_->IsFinishing()) {
++    page_transition_.reset();
++  }
++}
++
++void GestureNavSimple::CreateAffordance() {
++  aura::Window* window = web_contents_->GetNativeView();
++  affordance_ = std::make_unique<Affordance>(
++      this, mode_, window->bounds(), max_delta_ / completion_threshold_);
++
++  // Adding the affordance as a child of the content window is not sufficient,
++  // because it is possible for a new layer to be parented on top of the
++  // affordance layer (e.g. when the navigated-to page is displayed while the
++  // completion animation is in progress). So instead, it is installed on top of
++  // the content window as its sibling. Note that the affordance itself makes
++  // sure that its contents are clipped to the bounds given to it.
++  ui::Layer* parent = window->layer()->parent();
++  parent->Add(affordance_->root_layer());
++  parent->StackAtTop(affordance_->root_layer());
+ }
+ 
+ gfx::Size GestureNavSimple::GetDisplaySize() const {
+@@ -475,6 +578,17 @@
+ }
+ 
+ bool GestureNavSimple::OnOverscrollUpdate(float delta_x, float delta_y) {
++  if (page_transition_pending_) {
++    pending_delta_ = std::abs(delta_x);
++    return true;
++  }
++  if (page_transition_) {
++    if (page_transition_->IsFinishing()) {
++      return false;
++    }
++    UpdatePagePreview(std::abs(delta_x));
++    return true;
++  }
+   if (!affordance_ || affordance_->IsFinishing()) {
+     return false;
+   }
+@@ -500,11 +614,21 @@
+   mode_ = OVERSCROLL_NONE;
+   OverscrollSource overscroll_source = source_;
+   source_ = OverscrollSource::NONE;
+-  if (!affordance_ || affordance_->IsFinishing()) {
+-    return;
+-  }
+-
+-  affordance_->Complete();
++  if (page_transition_pending_) {
++    // The user finished before the snapshot arrived: just navigate.
++    page_transition_pending_ = false;
++  } else if (page_transition_) {
++    if (page_transition_->IsFinishing()) {
++      return;
++    }
++    // Commit before navigating so that the transition sees the navigation.
++    page_transition_->Commit();
++  } else {
++    if (!affordance_ || affordance_->IsFinishing()) {
++      return;
++    }
++    affordance_->Complete();
++  }
+ 
+   NavigationControllerImpl& controller = web_contents_->GetController();
+   NavigationDirection direction = NavigationDirection::NONE;
+@@ -578,6 +702,12 @@
+       RecordGestureOverscrollCancelled(GetDirectionFromMode(old_mode), source_);
+       affordance_->Abort();
+     }
++    if (page_transition_pending_) {
++      page_transition_pending_ = false;
++    } else if (page_transition_ && !page_transition_->IsFinishing()) {
++      RecordGestureOverscrollCancelled(GetDirectionFromMode(old_mode), source_);
++      page_transition_->Abort();
++    }
+     source_ = OverscrollSource::NONE;
+     return;
+   }
+@@ -609,23 +739,20 @@
+   max_delta_ = max_size - start_threshold;
+   CHECK_LE(0, max_delta_, base::NotFatalUntil::M158);
+ 
+-  aura::Window* window = web_contents_->GetNativeView();
+-  affordance_ = std::make_unique<Affordance>(
+-      this, mode_, window->bounds(), max_delta_ / completion_threshold_);
+-
+-  // Adding the affordance as a child of the content window is not sufficient,
+-  // because it is possible for a new layer to be parented on top of the
+-  // affordance layer (e.g. when the navigated-to page is displayed while the
+-  // completion animation is in progress). So instead, it is installed on top of
+-  // the content window as its sibling. Note that the affordance itself makes
+-  // sure that its contents are clipped to the bounds given to it.
+-  ui::Layer* parent = window->layer()->parent();
+-  parent->Add(affordance_->root_layer());
+-  parent->StackAtTop(affordance_->root_layer());
++  if (ShouldUsePagePreview(source)) {
++    // The overscroll controller caps the swipe distance at |max_delta_|. Let
++    // the page follow the fingers across its whole width rather than stopping
++    // at a cap derived from the display size.
++    max_delta_ = web_contents_->GetNativeView()->bounds().width() /
++                 kSwipePageGain;
++    StartPagePreview();
++    return;
++  }
++  CreateAffordance();
+ }
+ 
+ std::optional<float> GestureNavSimple::GetMaxOverscrollDelta() const {
+-  if (affordance_) {
++  if (affordance_ || page_transition_ || page_transition_pending_) {
+     return max_delta_;
+   }
+   return std::nullopt;
+--- a/content/browser/web_contents/aura/gesture_nav_simple.h
++++ b/content/browser/web_contents/aura/gesture_nav_simple.h
+@@ -8,12 +8,16 @@
+ #include <memory>
+ 
+ #include "base/memory/raw_ptr.h"
++#include "base/memory/weak_ptr.h"
+ #include "content/browser/renderer_host/overscroll_controller_delegate.h"
+ #include "content/common/content_export.h"
++#include "third_party/skia/include/core/SkBitmap.h"
+ 
+ namespace content {
+ 
+ class Affordance;
++class SwipePageTransition;
++class SwipeSnapshotCapturer;
+ class WebContentsImpl;
+ 
+ // A simple delegate for the overscroll controller that paints an arrow on top
+@@ -44,11 +48,28 @@
+                               cc::OverscrollBehavior behavior) override;
+   std::optional<float> GetMaxOverscrollDelta() const override;
+ 
++  // Helium: Safari-style page slide for touchpad history swipes.
++  bool ShouldUsePagePreview(OverscrollSource source) const;
++  void StartPagePreview();
++  void OnCurrentPageCaptured(int generation, SkBitmap current);
++  void CreateAffordance();
++  void UpdatePagePreview(float delta);
++  void OnPageTransitionFinished();
++  void DestroyPageTransition();
++
+   raw_ptr<WebContentsImpl> web_contents_ = nullptr;
+ 
+   OverscrollMode mode_ = OVERSCROLL_NONE;
+   OverscrollSource source_ = OverscrollSource::NONE;
+   std::unique_ptr<Affordance> affordance_;
++  std::unique_ptr<SwipeSnapshotCapturer> snapshot_capturer_;
++  std::unique_ptr<SwipePageTransition> page_transition_;
++  // True while the snapshot of the current page is being captured.
++  bool page_transition_pending_ = false;
++  float pending_delta_ = 0.f;
++  int pending_entry_id_ = 0;
++  int page_transition_generation_ = 0;
++  base::WeakPtrFactory<GestureNavSimple> page_transition_weak_factory_{this};
+   float completion_threshold_ = 0.f;
+ 
+   // When an overscroll is active, represents the maximum overscroll delta we
+--- a/content/public/browser/BUILD.gn
++++ b/content/public/browser/BUILD.gn
+@@ -460,6 +460,7 @@
+     "supported_delegations.h",
+     "surface_embed_connector.h",
+     "swap_metrics_driver.h",
++    "swipe_page_preview.h",
+     "synthetic_trial_syncer.h",
+     "touch_selection_controller_client_manager.h",
+     "tracing_controller.h",
+--- /dev/null
++++ b/content/browser/web_contents/aura/swipe_page_transition.cc
+@@ -0,0 +1,503 @@
++// Copyright 2026 The Helium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "content/browser/web_contents/aura/swipe_page_transition.h"
++
++#include <algorithm>
++#include <utility>
++
++#include "base/functional/bind.h"
++#include "base/location.h"
++#include "base/no_destructor.h"
++#include "components/viz/common/frame_sinks/copy_output_result.h"
++#include "base/task/sequenced_task_runner.h"
++#include "content/public/browser/navigation_controller.h"
++#include "content/public/browser/navigation_entry.h"
++#include "content/public/browser/navigation_handle.h"
++#include "content/public/browser/render_widget_host_view.h"
++#include "content/public/browser/swipe_page_preview.h"
++#include "content/public/browser/web_contents.h"
++#include "ui/base/ui_base_features.h"
++#include "ui/compositor/layer_delegate.h"
++#include "ui/compositor/paint_recorder.h"
++#include "ui/gfx/animation/linear_animation.h"
++#include "ui/gfx/animation/tween.h"
++#include "ui/gfx/canvas.h"
++#include "ui/gfx/geometry/transform.h"
++#include "ui/gfx/image/image_skia.h"
++#include "ui/native_theme/native_theme.h"
++
++namespace content {
++
++namespace {
++
++// Upper bound for memory held by cached snapshots.
++constexpr size_t kMaxCacheBytes = 192u * 1024u * 1024u;
++
++// Minimum time between two captures of the same history entry.
++constexpr auto kMinCaptureInterval = base::Milliseconds(750);
++
++// How far, as a fraction of the page width, the destination page is offset
++// when the swipe starts. It slides to 0 as the swipe progresses.
++constexpr float kPreviewParallax = 0.28f;
++
++// Strength of the dim on the destination page at the start of the swipe.
++constexpr float kPreviewDim = 0.22f;
++
++constexpr int kShadowWidth = 28;
++constexpr float kShadowPeakAlpha = 0.28f;
++
++constexpr auto kCommitDuration = base::Milliseconds(260);
++constexpr auto kAbortDuration = base::Milliseconds(240);
++constexpr auto kFadeDuration = base::Milliseconds(140);
++constexpr auto kSettleDelay = base::Milliseconds(60);
++constexpr auto kHoldTimeout = base::Seconds(4);
++
++SwipePagePreview::EnabledCallback g_enabled_callback = nullptr;
++
++SkColor FallbackBackgroundColor() {
++  return ui::NativeTheme::GetInstanceForWeb()->preferred_color_scheme() ==
++                 ui::NativeTheme::PreferredColorScheme::kDark
++             ? SkColorSetRGB(0x20, 0x21, 0x24)
++             : SK_ColorWHITE;
++}
++
++}  // namespace
++
++// static
++void SwipePagePreview::SetEnabledCallback(EnabledCallback callback) {
++  g_enabled_callback = callback;
++}
++
++// static
++bool SwipePagePreview::IsEnabled(WebContents* web_contents) {
++  return g_enabled_callback && web_contents && g_enabled_callback(web_contents);
++}
++
++// Paints a page snapshot (or a flat color if there is none) scaled to fill the
++// layer.
++class SnapshotPaintLayer : public ui::LayerDelegate {
++ public:
++  SnapshotPaintLayer(const gfx::Size& size,
++                     const SkBitmap& bitmap,
++                     SkColor fallback)
++      : fallback_(fallback) {
++    if (!bitmap.drawsNothing()) {
++      image_ = gfx::ImageSkia::CreateFromBitmap(bitmap, 1.f);
++    }
++    layer_.SetBounds(gfx::Rect(size));
++    layer_.SetFillsBoundsOpaquely(true);
++    layer_.set_delegate(this);
++  }
++
++  SnapshotPaintLayer(const SnapshotPaintLayer&) = delete;
++  SnapshotPaintLayer& operator=(const SnapshotPaintLayer&) = delete;
++
++  ~SnapshotPaintLayer() override { layer_.set_delegate(nullptr); }
++
++  ui::Layer* layer() { return &layer_; }
++
++ private:
++  // ui::LayerDelegate:
++  void OnPaintLayer(const ui::PaintContext& context) override {
++    ui::PaintRecorder recorder(context, layer_.size());
++    gfx::Canvas* canvas = recorder.canvas();
++    canvas->DrawColor(fallback_);
++    if (!image_.isNull()) {
++      canvas->DrawImageInt(image_, 0, 0, image_.width(), image_.height(), 0, 0,
++                           layer_.size().width(), layer_.size().height(),
++                           /*filter=*/true);
++    }
++  }
++  void OnDeviceScaleFactorChanged(float old_device_scale_factor,
++                                  float new_device_scale_factor) override {}
++
++  ui::LayerTextured layer_;
++  gfx::ImageSkia image_;
++  const SkColor fallback_;
++};
++
++// Paints the soft shadow cast by the moving page onto the page beneath.
++class ShadowPaintLayer : public ui::LayerDelegate {
++ public:
++  // |darkest_on_right|: the darkest strip is at the layer's right edge (the
++  // shadow of a page moving to the right sits to its left, against the page).
++  ShadowPaintLayer(const gfx::Rect& bounds, bool darkest_on_right)
++      : darkest_on_right_(darkest_on_right) {
++    layer_.SetBounds(bounds);
++    layer_.SetFillsBoundsOpaquely(false);
++    layer_.set_delegate(this);
++  }
++
++  ShadowPaintLayer(const ShadowPaintLayer&) = delete;
++  ShadowPaintLayer& operator=(const ShadowPaintLayer&) = delete;
++
++  ~ShadowPaintLayer() override { layer_.set_delegate(nullptr); }
++
++  ui::Layer* layer() { return &layer_; }
++
++ private:
++  // ui::LayerDelegate:
++  void OnPaintLayer(const ui::PaintContext& context) override {
++    ui::PaintRecorder recorder(context, layer_.size());
++    gfx::Canvas* canvas = recorder.canvas();
++    const int width = layer_.size().width();
++    const int height = layer_.size().height();
++    for (int i = 0; i < width; ++i) {
++      // t: 0 far from the page edge, 1 at the page edge.
++      const float t = static_cast<float>(i + 1) / static_cast<float>(width);
++      const float strength = t * t * t;
++      const int x = darkest_on_right_ ? i : width - 1 - i;
++      canvas->FillRect(gfx::Rect(x, 0, 1, height),
++                       SkColorSetA(SK_ColorBLACK,
++                                   static_cast<int>(strength *
++                                                    kShadowPeakAlpha * 255)));
++    }
++  }
++  void OnDeviceScaleFactorChanged(float old_device_scale_factor,
++                                  float new_device_scale_factor) override {}
++
++  ui::LayerTextured layer_;
++  const bool darkest_on_right_;
++};
++
++////////////////////////////////////////////////////////////////////////////////
++// SwipeSnapshotCache
++
++// static
++SwipeSnapshotCache& SwipeSnapshotCache::GetInstance() {
++  static base::NoDestructor<SwipeSnapshotCache> instance;
++  return *instance;
++}
++
++SwipeSnapshotCache::SwipeSnapshotCache() = default;
++SwipeSnapshotCache::~SwipeSnapshotCache() = default;
++
++void SwipeSnapshotCache::Put(const void* owner,
++                             int entry_id,
++                             const SkBitmap& bitmap) {
++  if (bitmap.drawsNothing()) {
++    return;
++  }
++  for (auto it = items_.begin(); it != items_.end(); ++it) {
++    if (it->owner == owner && it->entry_id == entry_id) {
++      total_bytes_ -= it->bitmap.computeByteSize();
++      items_.erase(it);
++      break;
++    }
++  }
++  total_bytes_ += bitmap.computeByteSize();
++  items_.push_front({owner, entry_id, bitmap});
++  Trim();
++}
++
++SkBitmap SwipeSnapshotCache::Get(const void* owner, int entry_id) {
++  for (auto it = items_.begin(); it != items_.end(); ++it) {
++    if (it->owner == owner && it->entry_id == entry_id) {
++      items_.splice(items_.begin(), items_, it);
++      return items_.front().bitmap;
++    }
++  }
++  return SkBitmap();
++}
++
++void SwipeSnapshotCache::RemoveOwner(const void* owner) {
++  for (auto it = items_.begin(); it != items_.end();) {
++    if (it->owner == owner) {
++      total_bytes_ -= it->bitmap.computeByteSize();
++      it = items_.erase(it);
++    } else {
++      ++it;
++    }
++  }
++}
++
++void SwipeSnapshotCache::Trim() {
++  while (total_bytes_ > kMaxCacheBytes && items_.size() > 1) {
++    total_bytes_ -= items_.back().bitmap.computeByteSize();
++    items_.pop_back();
++  }
++}
++
++////////////////////////////////////////////////////////////////////////////////
++// SwipeSnapshotCapturer
++
++SwipeSnapshotCapturer::SwipeSnapshotCapturer(WebContents* web_contents)
++    : WebContentsObserver(web_contents), owner_(web_contents) {}
++
++SwipeSnapshotCapturer::~SwipeSnapshotCapturer() {
++  SwipeSnapshotCache::GetInstance().RemoveOwner(owner_);
++}
++
++// static
++void SwipeSnapshotCapturer::CaptureCurrentPage(
++    WebContents* web_contents,
++    base::OnceCallback<void(SkBitmap)> callback) {
++  RenderWidgetHostView* view = web_contents->GetRenderWidgetHostView();
++  if (!view || !view->IsShowing()) {
++    std::move(callback).Run(SkBitmap());
++    return;
++  }
++  // The copy callback may run on any sequence: bounce the result back here.
++  view->CopyFromSurface(
++      gfx::Rect(), gfx::Size(), base::TimeDelta(),
++      base::BindOnce(
++          [](scoped_refptr<base::SequencedTaskRunner> runner,
++             base::OnceCallback<void(SkBitmap)> callback,
++             const CopyFromSurfaceResult& result) {
++            SkBitmap bitmap = result.has_value() ? result->bitmap : SkBitmap();
++            runner->PostTask(FROM_HERE, base::BindOnce(std::move(callback),
++                                                       std::move(bitmap)));
++          },
++          base::SequencedTaskRunner::GetCurrentDefault(),
++          std::move(callback)));
++}
++
++void SwipeSnapshotCapturer::DidStartNavigation(
++    NavigationHandle* navigation_handle) {
++  if (!navigation_handle->IsInPrimaryMainFrame()) {
++    return;
++  }
++  // A same-document navigation (fragment, pushState, ...) has already changed
++  // what the page shows by the time the browser hears about it, so a capture
++  // now would record the *new* state under the old entry. Pages left this
++  // way are captured when a swipe gesture starts instead.
++  if (navigation_handle->IsSameDocument()) {
++    return;
++  }
++  if (!SwipePagePreview::IsEnabled(web_contents())) {
++    return;
++  }
++  NavigationEntry* entry = web_contents()->GetController().GetLastCommittedEntry();
++  if (!entry) {
++    return;
++  }
++  const int entry_id = entry->GetUniqueID();
++  const base::TimeTicks now = base::TimeTicks::Now();
++  if (entry_id == last_entry_id_ &&
++      now - last_capture_time_ < kMinCaptureInterval) {
++    return;
++  }
++  last_entry_id_ = entry_id;
++  last_capture_time_ = now;
++  CaptureCurrentPage(
++      web_contents(),
++      base::BindOnce(&SwipeSnapshotCapturer::OnCaptured,
++                     weak_factory_.GetWeakPtr(), entry_id));
++}
++
++void SwipeSnapshotCapturer::OnCaptured(int entry_id, SkBitmap bitmap) {
++  SwipeSnapshotCache::GetInstance().Put(owner_, entry_id, bitmap);
++}
++
++////////////////////////////////////////////////////////////////////////////////
++// SwipePageTransition
++
++SwipePageTransition::SwipePageTransition(WebContents* web_contents,
++                                         bool is_back,
++                                         const gfx::Rect& bounds,
++                                         const SkBitmap& current,
++                                         const SkBitmap& destination,
++                                         base::OnceClosure on_finished)
++    : WebContentsObserver(web_contents),
++      is_back_(is_back),
++      bounds_(bounds),
++      on_finished_(std::move(on_finished)) {
++  const gfx::Size size = bounds.size();
++  const SkColor fallback = FallbackBackgroundColor();
++
++  // The overlay is a child of the content window's layer, so its origin is
++  // the window's own (0, 0).
++  root_layer_.SetBounds(gfx::Rect(size));
++  root_layer_.SetMasksToBounds(true);
++
++  backdrop_layer_.SetBounds(gfx::Rect(size));
++  backdrop_layer_.SetColor(SkColor4f::FromColor(fallback));
++  root_layer_.Add(&backdrop_layer_);
++
++  preview_ = std::make_unique<SnapshotPaintLayer>(size, destination, fallback);
++  root_layer_.Add(preview_->layer());
++
++  dim_layer_.SetBounds(gfx::Rect(size));
++  dim_layer_.SetColor(SkColors::kBlack);
++  dim_layer_.SetOpacity(kPreviewDim);
++  root_layer_.Add(&dim_layer_);
++
++  current_container_.SetBounds(gfx::Rect(size));
++  root_layer_.Add(&current_container_);
++
++  current_ = std::make_unique<SnapshotPaintLayer>(size, current, fallback);
++  current_container_.Add(current_->layer());
++
++  const gfx::Rect shadow_bounds(is_back_ ? -kShadowWidth : size.width(), 0,
++                                kShadowWidth, size.height());
++  shadow_ = std::make_unique<ShadowPaintLayer>(
++      shadow_bounds, /*darkest_on_right=*/is_back_);
++  current_container_.Add(shadow_->layer());
++
++  ApplyProgress(0.f);
++}
++
++SwipePageTransition::~SwipePageTransition() {
++  // Make sure no animation callbacks arrive during member destruction.
++  animation_.reset();
++}
++
++void SwipePageTransition::Attach(ui::Layer* parent) {
++  parent->Add(&root_layer_);
++  parent->StackAtTop(&root_layer_);
++}
++
++void SwipePageTransition::SetDragOffset(float offset) {
++  if (state_ != State::kDragging || width() <= 0) {
++    return;
++  }
++  ApplyProgress(std::clamp(offset / static_cast<float>(width()), 0.f, 1.f));
++}
++
++void SwipePageTransition::ApplyProgress(float progress) {
++  progress_ = progress;
++  const float w = static_cast<float>(width());
++  const float direction = is_back_ ? 1.f : -1.f;
++
++  gfx::Transform current_transform;
++  current_transform.Translate(direction * progress * w, 0);
++  current_container_.SetTransform(current_transform);
++
++  gfx::Transform preview_transform;
++  preview_transform.Translate(-direction * (1.f - progress) * kPreviewParallax * w,
++                              0);
++  preview_->layer()->SetTransform(preview_transform);
++  dim_layer_.SetTransform(preview_transform);
++  dim_layer_.SetOpacity(kPreviewDim * (1.f - progress));
++}
++
++void SwipePageTransition::StartAnimation(base::TimeDelta duration) {
++  animation_from_ = progress_;
++  animation_ = std::make_unique<gfx::LinearAnimation>(
++      duration, gfx::LinearAnimation::kDefaultFrameRate, this);
++  animation_->Start();
++}
++
++void SwipePageTransition::Abort() {
++  if (state_ != State::kDragging) {
++    return;
++  }
++  state_ = State::kAborting;
++  animation_to_ = 0.f;
++  StartAnimation(kAbortDuration * std::max(progress_, 0.25f));
++}
++
++void SwipePageTransition::Commit() {
++  if (state_ != State::kDragging) {
++    return;
++  }
++  state_ = State::kCommitting;
++  animation_to_ = 1.f;
++  StartAnimation(kCommitDuration * std::max(1.f - progress_, 0.35f));
++  hold_timeout_timer_.Start(
++      FROM_HERE, kHoldTimeout,
++      base::BindOnce(&SwipePageTransition::StartFade, base::Unretained(this)));
++}
++
++void SwipePageTransition::MaybeStartDismiss() {
++  if (state_ != State::kHolding || !navigation_done_ ||
++      settle_timer_.IsRunning()) {
++    return;
++  }
++  settle_timer_.Start(
++      FROM_HERE, kSettleDelay,
++      base::BindOnce(&SwipePageTransition::StartFade, base::Unretained(this)));
++}
++
++void SwipePageTransition::StartFade() {
++  if (state_ == State::kFading || finished_) {
++    return;
++  }
++  hold_timeout_timer_.Stop();
++  settle_timer_.Stop();
++  state_ = State::kFading;
++  animation_ = std::make_unique<gfx::LinearAnimation>(
++      kFadeDuration, gfx::LinearAnimation::kDefaultFrameRate, this);
++  animation_->Start();
++}
++
++void SwipePageTransition::Finish() {
++  if (finished_) {
++    return;
++  }
++  finished_ = true;
++  hold_timeout_timer_.Stop();
++  settle_timer_.Stop();
++  if (on_finished_) {
++    std::move(on_finished_).Run();
++  }
++}
++
++void SwipePageTransition::AnimationProgressed(const gfx::Animation* animation) {
++  const float t = animation->GetCurrentValue();
++  switch (state_) {
++    case State::kAborting:
++    case State::kCommitting: {
++      const float eased =
++          gfx::Tween::CalculateValue(gfx::Tween::FAST_OUT_SLOW_IN, t);
++      ApplyProgress(animation_from_ + (animation_to_ - animation_from_) * eased);
++      break;
++    }
++    case State::kFading:
++      root_layer_.SetOpacity(1.f - t);
++      break;
++    case State::kDragging:
++    case State::kHolding:
++      break;
++  }
++}
++
++void SwipePageTransition::AnimationEnded(const gfx::Animation* animation) {
++  switch (state_) {
++    case State::kAborting:
++      ApplyProgress(0.f);
++      Finish();
++      break;
++    case State::kCommitting:
++      ApplyProgress(1.f);
++      state_ = State::kHolding;
++      MaybeStartDismiss();
++      break;
++    case State::kFading:
++      Finish();
++      break;
++    case State::kDragging:
++    case State::kHolding:
++      break;
++  }
++}
++
++void SwipePageTransition::AnimationCanceled(const gfx::Animation* animation) {}
++
++void SwipePageTransition::StackAtTop() {
++  if (root_layer_.parent()) {
++    root_layer_.parent()->StackAtTop(&root_layer_);
++  }
++}
++
++void SwipePageTransition::RenderFrameHostChanged(RenderFrameHost* old_host,
++                                                 RenderFrameHost* new_host) {
++  StackAtTop();
++}
++
++void SwipePageTransition::DidFinishNavigation(
++    NavigationHandle* navigation_handle) {
++  if (!navigation_handle->IsInPrimaryMainFrame()) {
++    return;
++  }
++  StackAtTop();
++  if (state_ != State::kCommitting && state_ != State::kHolding) {
++    return;
++  }
++  navigation_done_ = true;
++  MaybeStartDismiss();
++}
++
++}  // namespace content
+--- /dev/null
++++ b/content/browser/web_contents/aura/swipe_page_transition.h
+@@ -0,0 +1,177 @@
++// Copyright 2026 The Helium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CONTENT_BROWSER_WEB_CONTENTS_AURA_SWIPE_PAGE_TRANSITION_H_
++#define CONTENT_BROWSER_WEB_CONTENTS_AURA_SWIPE_PAGE_TRANSITION_H_
++
++#include <list>
++#include <memory>
++
++#include "base/functional/callback.h"
++#include "base/memory/raw_ptr.h"
++#include "base/memory/weak_ptr.h"
++#include "base/no_destructor.h"
++#include "base/time/time.h"
++#include "base/timer/timer.h"
++#include "content/common/content_export.h"
++#include "content/public/browser/web_contents_observer.h"
++#include "third_party/skia/include/core/SkBitmap.h"
++#include "ui/compositor/layer.h"
++#include "ui/compositor/layer_not_drawn.h"
++#include "ui/compositor/layer_solid_color.h"
++#include "ui/compositor/layer_textured.h"
++#include "ui/gfx/animation/animation_delegate.h"
++#include "ui/gfx/geometry/rect.h"
++
++namespace gfx {
++class LinearAnimation;
++}  // namespace gfx
++
++namespace content {
++
++class SnapshotPaintLayer;
++class ShadowPaintLayer;
++
++// Process-wide, size-bounded LRU of page snapshots, keyed by (WebContents,
++// NavigationEntry unique id). A snapshot is the content area as it looked when
++// the user navigated away from that entry.
++class SwipeSnapshotCache {
++ public:
++  static SwipeSnapshotCache& GetInstance();
++
++  SwipeSnapshotCache(const SwipeSnapshotCache&) = delete;
++  SwipeSnapshotCache& operator=(const SwipeSnapshotCache&) = delete;
++
++  void Put(const void* owner, int entry_id, const SkBitmap& bitmap);
++  // Returns a null bitmap if there is no snapshot.
++  SkBitmap Get(const void* owner, int entry_id);
++  void RemoveOwner(const void* owner);
++
++ private:
++  friend class base::NoDestructor<SwipeSnapshotCache>;
++  SwipeSnapshotCache();
++  ~SwipeSnapshotCache();
++
++  struct Item {
++    const void* owner;
++    int entry_id;
++    SkBitmap bitmap;
++  };
++  void Trim();
++
++  std::list<Item> items_;
++  size_t total_bytes_ = 0;
++};
++
++// Captures a snapshot of the displayed page whenever a main frame navigation
++// is about to leave it, so it can be shown later during a swipe gesture.
++class SwipeSnapshotCapturer : public WebContentsObserver {
++ public:
++  explicit SwipeSnapshotCapturer(WebContents* web_contents);
++  ~SwipeSnapshotCapturer() override;
++
++  // Asynchronously copies the pixels of the currently displayed page.
++  // |callback| receives a null bitmap on failure. Always runs asynchronously
++  // or synchronously on the calling sequence.
++  static void CaptureCurrentPage(WebContents* web_contents,
++                                 base::OnceCallback<void(SkBitmap)> callback);
++
++ private:
++  // WebContentsObserver:
++  void DidStartNavigation(NavigationHandle* navigation_handle) override;
++
++  void OnCaptured(int entry_id, SkBitmap bitmap);
++
++  const raw_ptr<const void> owner_;
++  int last_entry_id_ = 0;
++  base::TimeTicks last_capture_time_;
++  base::WeakPtrFactory<SwipeSnapshotCapturer> weak_factory_{this};
++};
++
++// A Safari-style page slide: the current page (a snapshot of it) follows the
++// swipe, uncovering a snapshot of the destination history entry that moves
++// with parallax underneath. The overlay is installed as a sibling above the
++// WebContents native window and removed once the real navigation has
++// presented.
++class CONTENT_EXPORT SwipePageTransition : public gfx::AnimationDelegate,
++                                           public WebContentsObserver {
++ public:
++  // |is_back|: the page slides to the right (back) rather than to the left.
++  // |destination| may be a null bitmap, in which case a plain themed
++  // background is shown.
++  SwipePageTransition(WebContents* web_contents,
++                      bool is_back,
++                      const gfx::Rect& bounds,
++                      const SkBitmap& current,
++                      const SkBitmap& destination,
++                      base::OnceClosure on_finished);
++  ~SwipePageTransition() override;
++
++  // Installs the overlay above all other children of |parent|, which must be
++  // the content window's layer.
++  void Attach(ui::Layer* parent);
++
++  int width() const { return bounds_.width(); }
++
++  // Sets how far the page has been dragged, in DIPs, in [0, width()].
++  void SetDragOffset(float offset);
++
++  // Animates back to the original page and then finishes.
++  void Abort();
++
++  // The navigation was triggered: finish the slide and keep the destination
++  // snapshot visible until the new page has presented.
++  void Commit();
++
++  bool IsFinishing() const { return state_ != State::kDragging; }
++
++ private:
++  enum class State { kDragging, kAborting, kCommitting, kHolding, kFading };
++
++  void ApplyProgress(float progress);
++  void StartAnimation(base::TimeDelta duration);
++  void MaybeStartDismiss();
++  void StartFade();
++  void Finish();
++
++  // gfx::AnimationDelegate:
++  void AnimationEnded(const gfx::Animation* animation) override;
++  void AnimationProgressed(const gfx::Animation* animation) override;
++  void AnimationCanceled(const gfx::Animation* animation) override;
++
++  // WebContentsObserver:
++  void DidFinishNavigation(NavigationHandle* navigation_handle) override;
++  void RenderFrameHostChanged(RenderFrameHost* old_host,
++                              RenderFrameHost* new_host) override;
++
++  // Keeps the overlay above any view added by the navigation.
++  void StackAtTop();
++
++  const bool is_back_;
++  const gfx::Rect bounds_;
++  base::OnceClosure on_finished_;
++
++  State state_ = State::kDragging;
++  float progress_ = 0.f;
++  float animation_from_ = 0.f;
++  float animation_to_ = 0.f;
++  bool navigation_done_ = false;
++  bool finished_ = false;
++
++  ui::LayerNotDrawn root_layer_;
++  ui::LayerSolidColor backdrop_layer_;
++  std::unique_ptr<SnapshotPaintLayer> preview_;
++  ui::LayerSolidColor dim_layer_;
++  ui::LayerNotDrawn current_container_;
++  std::unique_ptr<SnapshotPaintLayer> current_;
++  std::unique_ptr<ShadowPaintLayer> shadow_;
++
++  std::unique_ptr<gfx::LinearAnimation> animation_;
++  base::OneShotTimer settle_timer_;
++  base::OneShotTimer hold_timeout_timer_;
++};
++
++}  // namespace content
++
++#endif  // CONTENT_BROWSER_WEB_CONTENTS_AURA_SWIPE_PAGE_TRANSITION_H_
+--- /dev/null
++++ b/content/public/browser/swipe_page_preview.h
+@@ -0,0 +1,35 @@
++// Copyright 2026 The Helium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CONTENT_PUBLIC_BROWSER_SWIPE_PAGE_PREVIEW_H_
++#define CONTENT_PUBLIC_BROWSER_SWIPE_PAGE_PREVIEW_H_
++
++#include "content/common/content_export.h"
++
++namespace content {
++
++class WebContents;
++
++// Hook that lets the embedder decide, per WebContents and at the moment a
++// gesture starts, whether a touchpad swipe between history entries should
++// slide the page and reveal a snapshot of the destination page (instead of
++// only showing the small arrow affordance). Only used on Aura platforms.
++class CONTENT_EXPORT SwipePagePreview {
++ public:
++  using EnabledCallback = bool (*)(WebContents*);
++
++  SwipePagePreview() = delete;
++
++  // Registers the embedder callback. It is queried when a swipe gesture
++  // begins and before snapshots are captured. Not owned; must outlive use.
++  static void SetEnabledCallback(EnabledCallback callback);
++
++  // Returns true if the page-slide preview is enabled for |web_contents|.
++  // Returns false if no callback has been registered.
++  static bool IsEnabled(WebContents* web_contents);
++};
++
++}  // namespace content
++
++#endif  // CONTENT_PUBLIC_BROWSER_SWIPE_PAGE_PREVIEW_H_
+--- a/chrome/common/pref_names.h
++++ b/chrome/common/pref_names.h
+@@ -641,6 +641,12 @@
+ // allowed to show transparent page backgrounds.
+ inline constexpr char kHeliumWaylandTransparentWebContent[] =
+     "helium.browser.wayland_transparent_web_content";
++
++// Linux (Wayland) only. A boolean pref set to true if a two-finger touchpad
++// swipe between pages should slide the page and reveal the previous or next
++// page underneath it.
++inline constexpr char kHeliumWaylandSwipePagePreview[] =
++    "helium.browser.wayland_swipe_page_preview";
+ 
+ // An enum (HeliumLayoutType) pref that controls the browser layout.
+ inline constexpr char kHeliumLayout[] = "helium.browser.layout";
+--- a/chrome/browser/ui/browser_ui_prefs.cc
++++ b/chrome/browser/ui/browser_ui_prefs.cc
+@@ -141,6 +141,7 @@
+   registry->RegisterBooleanPref(prefs::kHeliumWaylandFrameBlur, false);
+   registry->RegisterBooleanPref(prefs::kHeliumWaylandTransparentWebContent,
+                                 false);
++  registry->RegisterBooleanPref(prefs::kHeliumWaylandSwipePagePreview, true);
+ 
+   registry->RegisterBooleanPref(prefs::kHeliumCenteredLocationBar, false);
+ 
+--- a/chrome/browser/extensions/api/settings_private/prefs_util.cc
++++ b/chrome/browser/extensions/api/settings_private/prefs_util.cc
+@@ -241,6 +241,8 @@
+       settings_api::PrefType::kBoolean;
+   (*s_allowlist)[::prefs::kHeliumWaylandTransparentWebContent] =
+       settings_api::PrefType::kBoolean;
++  (*s_allowlist)[::prefs::kHeliumWaylandSwipePagePreview] =
++      settings_api::PrefType::kBoolean;
+ 
+   // Miscellaneous
+   (*s_allowlist)[::embedder_support::kAlternateErrorPagesEnabled] =
+--- a/chrome/app/settings_strings.grdp
++++ b/chrome/app/settings_strings.grdp
+@@ -308,6 +308,12 @@
+     </message>
+     <message name="IDS_SETTINGS_WAYLAND_TRANSPARENT_WEB_CONTENT_DESCRIPTION" desc="Description for the toggle which lets pages with transparent backgrounds show the desktop behind the browser on Wayland.">
+       Lets pages with transparent backgrounds show the desktop. Sites that set an opaque background stay opaque.
++    </message>
++    <message name="IDS_SETTINGS_WAYLAND_SWIPE_PAGE_PREVIEW" desc="Label for the toggle which makes two-finger swipes between pages slide the page and show the previous or next page underneath.">
++      Slide pages when swiping
++    </message>
++    <message name="IDS_SETTINGS_WAYLAND_SWIPE_PAGE_PREVIEW_DESCRIPTION" desc="Description for the toggle which makes two-finger swipes between pages slide the page and show the previous or next page underneath.">
++      A two-finger swipe left or right on the touchpad moves the page and reveals the previous or next page, instead of only showing an arrow.
+     </message>
+     <message name="IDS_SETTINGS_LAYOUT" desc="Title of the settings section which controls how the browser UI is laid out.">
+       Layout
+--- a/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
++++ b/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
+@@ -623,6 +623,9 @@
+        IDS_SETTINGS_WAYLAND_TRANSPARENT_WEB_CONTENT},
+       {"waylandTransparentWebContentDescription",
+        IDS_SETTINGS_WAYLAND_TRANSPARENT_WEB_CONTENT_DESCRIPTION},
++      {"waylandSwipePagePreview", IDS_SETTINGS_WAYLAND_SWIPE_PAGE_PREVIEW},
++      {"waylandSwipePagePreviewDescription",
++       IDS_SETTINGS_WAYLAND_SWIPE_PAGE_PREVIEW_DESCRIPTION},
+       {"layoutPageTitle", IDS_SETTINGS_LAYOUT},
+       {"browserLayout", IDS_SETTINGS_BROWSER_LAYOUT},
+       {"browserLayoutClassic", IDS_SETTINGS_BROWSER_LAYOUT_CLASSIC},
