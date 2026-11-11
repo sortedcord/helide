@@ -45,11 +45,13 @@
  declare global {
 --- a/chrome/browser/ui/views/chrome_browser_main_extra_parts_views_linux.cc
 +++ b/chrome/browser/ui/views/chrome_browser_main_extra_parts_views_linux.cc
-@@ -7,8 +7,13 @@
+@@ -7,8 +7,15 @@
  #include "base/functional/bind.h"
  #include "base/notreached.h"
  #include "chrome/browser/lifetime/application_lifetime_desktop.h"
 +#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/ui/views/frame/browser_view.h"
++#include "chrome/browser/ui/views/helium/native_frame_materials.h"
  #include "chrome/browser/themes/theme_service_aura_linux.h"
  #include "chrome/browser/ui/views/theme_profile_key.h"
 +#include "chrome/common/pref_names.h"
@@ -59,10 +61,19 @@
  #include "ui/base/buildflags.h"
  #include "ui/base/cursor/cursor_factory.h"
  #include "ui/base/ime/input_method.h"
-@@ -44,6 +49,18 @@
+@@ -18,6 +25,7 @@
+ #include "ui/linux/linux_ui_getter.h"
+ #include "ui/native_theme/native_theme.h"
+ #include "ui/ozone/public/ozone_platform.h"
++#include "ui/views/widget/widget.h"
+ 
+ #if BUILDFLAG(USE_DBUS)
+ #include "ui/linux/portal_settings_linux.h"
+@@ -43,6 +51,31 @@
+                : ui::GetDefaultLinuxUiTheme();
    }
  };
- 
++
 +// Helium: whether a touchpad swipe between pages should slide the page and
 +// show the destination page underneath it (native Wayland only).
 +bool IsSwipePagePreviewEnabled(content::WebContents* web_contents) {
@@ -75,14 +86,28 @@
 +         profile->GetPrefs()->GetBoolean(prefs::kHeliumWaylandSwipePagePreview);
 +}
 +
++// Helium: whether the pages of |web_contents| are shown translucent, so the
++// swipe slide must not paint an opaque background.
++bool AreSwipePagesTranslucent(content::WebContents* web_contents) {
++  const views::Widget* widget =
++      views::Widget::GetTopLevelWidgetForNativeView(
++          web_contents->GetNativeView());
++  BrowserView* browser_view =
++      widget ? BrowserView::GetBrowserViewForNativeWindow(
++                   widget->GetNativeWindow())
++             : nullptr;
++  return helium::ShouldAllowWaylandWebTransparency(browser_view);
++}
+ 
  }  // namespace
  
- ChromeBrowserMainExtraPartsViewsLinux::ChromeBrowserMainExtraPartsViewsLinux() =
-@@ -76,6 +93,8 @@
+@@ -76,6 +109,10 @@
  void ChromeBrowserMainExtraPartsViewsLinux::PostCreateMainMessageLoop() {
    ChromeBrowserMainExtraPartsViews::PostCreateMainMessageLoop();
  
 +  content::SwipePagePreview::SetEnabledCallback(&IsSwipePagePreviewEnabled);
++  content::SwipePagePreview::SetTranslucentPagesCallback(
++      &AreSwipePagesTranslucent);
 +
    if (auto* linux_ui = ui::LinuxUi::instance()) {
      linux_ui->SetShutdownCb(base::BindOnce([] {
@@ -140,7 +165,7 @@
  
  bool ShouldNavigateForward(NavigationController* controller,
                             OverscrollMode mode) {
-@@ -460,12 +466,109 @@
+@@ -460,12 +466,110 @@
  }
  
  GestureNavSimple::GestureNavSimple(WebContentsImpl* web_contents)
@@ -207,6 +232,7 @@
 +      web_contents_, is_back, window->bounds(), current,
 +      SwipeSnapshotCache::GetInstance().Get(web_contents_,
 +                                            destination->GetUniqueID()),
++      SwipePagePreview::AreTranslucentPagesEnabled(web_contents_),
 +      base::BindOnce(&GestureNavSimple::OnPageTransitionFinished,
 +                     page_transition_weak_factory_.GetWeakPtr()));
 +  page_transition_->Attach(window->layer());
@@ -251,7 +277,7 @@
  }
  
  gfx::Size GestureNavSimple::GetDisplaySize() const {
-@@ -475,6 +578,17 @@
+@@ -475,6 +579,17 @@
  }
  
  bool GestureNavSimple::OnOverscrollUpdate(float delta_x, float delta_y) {
@@ -269,7 +295,7 @@
    if (!affordance_ || affordance_->IsFinishing()) {
      return false;
    }
-@@ -500,11 +614,21 @@
+@@ -500,11 +615,21 @@
    mode_ = OVERSCROLL_NONE;
    OverscrollSource overscroll_source = source_;
    source_ = OverscrollSource::NONE;
@@ -296,7 +322,7 @@
  
    NavigationControllerImpl& controller = web_contents_->GetController();
    NavigationDirection direction = NavigationDirection::NONE;
-@@ -578,6 +702,12 @@
+@@ -578,6 +703,12 @@
        RecordGestureOverscrollCancelled(GetDirectionFromMode(old_mode), source_);
        affordance_->Abort();
      }
@@ -309,7 +335,7 @@
      source_ = OverscrollSource::NONE;
      return;
    }
-@@ -609,23 +739,20 @@
+@@ -609,23 +740,20 @@
    max_delta_ = max_size - start_threshold;
    CHECK_LE(0, max_delta_, base::NotFatalUntil::M158);
  
@@ -404,7 +430,7 @@
      "tracing_controller.h",
 --- /dev/null
 +++ b/content/browser/web_contents/aura/swipe_page_transition.cc
-@@ -0,0 +1,505 @@
+@@ -0,0 +1,586 @@
 +// Copyright 2026 The Helium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -412,6 +438,7 @@
 +#include "content/browser/web_contents/aura/swipe_page_transition.h"
 +
 +#include <algorithm>
++#include <cmath>
 +#include <utility>
 +
 +#include "base/functional/bind.h"
@@ -458,6 +485,7 @@
 +constexpr auto kHoldTimeout = base::Seconds(4);
 +
 +SwipePagePreview::EnabledCallback g_enabled_callback = nullptr;
++SwipePagePreview::EnabledCallback g_translucent_callback = nullptr;
 +
 +SkColor FallbackBackgroundColor() {
 +  return ui::NativeTheme::GetInstanceForWeb()->preferred_color_scheme() ==
@@ -478,19 +506,31 @@
 +  return g_enabled_callback && web_contents && g_enabled_callback(web_contents);
 +}
 +
++// static
++void SwipePagePreview::SetTranslucentPagesCallback(EnabledCallback callback) {
++  g_translucent_callback = callback;
++}
++
++// static
++bool SwipePagePreview::AreTranslucentPagesEnabled(WebContents* web_contents) {
++  return g_translucent_callback && web_contents &&
++         g_translucent_callback(web_contents);
++}
++
 +// Paints a page snapshot (or a flat color if there is none) scaled to fill the
 +// layer.
 +class SnapshotPaintLayer : public ui::LayerDelegate {
 + public:
 +  SnapshotPaintLayer(const gfx::Size& size,
 +                     const SkBitmap& bitmap,
-+                     SkColor fallback)
++                     SkColor fallback,
++                     bool opaque)
 +      : fallback_(fallback) {
 +    if (!bitmap.drawsNothing()) {
 +      image_ = gfx::ImageSkia::CreateFromBitmap(bitmap, 1.f);
 +    }
 +    layer_.SetBounds(gfx::Rect(size));
-+    layer_.SetFillsBoundsOpaquely(true);
++    layer_.SetFillsBoundsOpaquely(opaque);
 +    layer_.set_delegate(this);
 +  }
 +
@@ -702,38 +742,49 @@
 +                                         const gfx::Rect& bounds,
 +                                         const SkBitmap& current,
 +                                         const SkBitmap& destination,
++                                         bool translucent,
 +                                         base::OnceClosure on_finished)
 +    : WebContentsObserver(web_contents),
 +      is_back_(is_back),
++      translucent_(translucent),
 +      bounds_(bounds),
 +      on_finished_(std::move(on_finished)) {
 +  const gfx::Size size = bounds.size();
-+  const SkColor fallback = FallbackBackgroundColor();
++  // When pages are translucent the slide must not paint an opaque background,
++  // or the desktop would stop showing through for the length of the swipe.
++  const SkColor fallback =
++      translucent_ ? SK_ColorTRANSPARENT : FallbackBackgroundColor();
 +
 +  // The overlay is a child of the content window's layer, so its origin is
 +  // the window's own (0, 0).
 +  root_layer_.SetBounds(gfx::Rect(size));
 +  root_layer_.SetMasksToBounds(true);
 +
-+  backdrop_layer_.SetBounds(gfx::Rect(size));
-+  backdrop_layer_.SetColor(SkColor4f::FromColor(fallback));
-+  root_layer_.Add(&backdrop_layer_);
++  if (!translucent_) {
++    backdrop_layer_.SetBounds(gfx::Rect(size));
++    backdrop_layer_.SetColor(SkColor4f::FromColor(fallback));
++    root_layer_.Add(&backdrop_layer_);
++  }
 +
 +  // Back: the current page is on top, the previous page underneath.
 +  // Forward: the next page is on top, the current page underneath.
++  under_clip_.SetBounds(gfx::Rect(size));
++  under_clip_.SetMasksToBounds(true);
++  root_layer_.Add(&under_clip_);
++
 +  under_ = std::make_unique<SnapshotPaintLayer>(
-+      size, is_back_ ? destination : current, fallback);
-+  root_layer_.Add(under_->layer());
++      size, is_back_ ? destination : current, fallback, !translucent_);
++  under_clip_.Add(under_->layer());
 +
 +  dim_layer_.SetBounds(gfx::Rect(size));
 +  dim_layer_.SetColor(SkColors::kBlack);
-+  root_layer_.Add(&dim_layer_);
++  under_clip_.Add(&dim_layer_);
 +
 +  over_container_.SetBounds(gfx::Rect(size));
 +  root_layer_.Add(&over_container_);
 +
 +  over_ = std::make_unique<SnapshotPaintLayer>(
-+      size, is_back_ ? current : destination, fallback);
++      size, is_back_ ? current : destination, fallback, !translucent_);
 +  over_container_.Add(over_->layer());
 +
 +  // The sliding page always casts its shadow on the page beneath from its
@@ -749,11 +800,47 @@
 +SwipePageTransition::~SwipePageTransition() {
 +  // Make sure no animation callbacks arrive during member destruction.
 +  animation_.reset();
++  RestoreLiveContent();
 +}
 +
 +void SwipePageTransition::Attach(ui::Layer* parent) {
 +  parent->Add(&root_layer_);
 +  parent->StackAtTop(&root_layer_);
++  if (translucent_) {
++    HideLiveContent();
++  }
++}
++
++void SwipePageTransition::HideLiveContent() {
++  ui::Layer* parent = root_layer_.parent();
++  if (!parent) {
++    return;
++  }
++  // The real page would show through the transparent parts of the snapshots,
++  // so hide it while the overlay stands in for it. New views added by a
++  // navigation are hidden too (see RenderFrameHostChanged()).
++  for (ui::Layer* child : parent->children()) {
++    if (child != &root_layer_) {
++      child->SetOpacity(0.f);
++    }
++  }
++  live_content_hidden_ = true;
++}
++
++void SwipePageTransition::RestoreLiveContent() {
++  if (!live_content_hidden_) {
++    return;
++  }
++  live_content_hidden_ = false;
++  ui::Layer* parent = root_layer_.parent();
++  if (!parent) {
++    return;
++  }
++  for (ui::Layer* child : parent->children()) {
++    if (child != &root_layer_) {
++      child->SetOpacity(1.f);
++    }
++  }
 +}
 +
 +void SwipePageTransition::SetDragOffset(float offset) {
@@ -773,10 +860,17 @@
 +  over_transform.Translate(over_offset, 0);
 +  over_container_.SetTransform(over_transform);
 +
++  // The page underneath is only visible where the page on top has moved away,
++  // which is the strip [0, over_offset). The snapshot itself stays put.
++  under_clip_.SetBounds(
++      gfx::Rect(0, 0, std::clamp(static_cast<int>(std::lround(over_offset)), 0,
++                                 width()),
++                bounds_.height()));
++
 +  // The page underneath darkens as it gets covered and lightens as it is
 +  // uncovered.
 +  const float covered = is_back_ ? 1.f - progress : progress;
-+  dim_layer_.SetOpacity(kPreviewDim * covered);
++  dim_layer_.SetOpacity(translucent_ ? 0.f : kPreviewDim * covered);
 +  // The shadow strip sits just outside the sliding page's left edge. When the
 +  // page is at the screen edge that strip would poke into view, so fade it out.
 +  shadow_->layer()->SetOpacity(std::min(1.f, covered * 8.f));
@@ -827,6 +921,13 @@
 +  hold_timeout_timer_.Stop();
 +  settle_timer_.Stop();
 +  state_ = State::kFading;
++  if (translucent_) {
++    // A cross-fade would show both the snapshot and the real page through
++    // each other, so swap them in one step.
++    animation_.reset();
++    Finish();
++    return;
++  }
 +  animation_ = std::make_unique<gfx::LinearAnimation>(
 +      kFadeDuration, gfx::LinearAnimation::kDefaultFrameRate, this);
 +  animation_->Start();
@@ -839,6 +940,9 @@
 +  finished_ = true;
 +  hold_timeout_timer_.Stop();
 +  settle_timer_.Stop();
++  // Show the real page and drop the overlay in the same frame.
++  RestoreLiveContent();
++  root_layer_.SetVisible(false);
 +  if (on_finished_) {
 +    std::move(on_finished_).Run();
 +  }
@@ -889,6 +993,9 @@
 +  if (root_layer_.parent()) {
 +    root_layer_.parent()->StackAtTop(&root_layer_);
 +  }
++  if (translucent_ && live_content_hidden_) {
++    HideLiveContent();
++  }
 +}
 +
 +void SwipePageTransition::RenderFrameHostChanged(RenderFrameHost* old_host,
@@ -912,7 +1019,7 @@
 +}  // namespace content
 --- /dev/null
 +++ b/content/browser/web_contents/aura/swipe_page_transition.h
-@@ -0,0 +1,181 @@
+@@ -0,0 +1,191 @@
 +// Copyright 2026 The Helium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -1020,6 +1127,7 @@
 +                      const gfx::Rect& bounds,
 +                      const SkBitmap& current,
 +                      const SkBitmap& destination,
++                      bool translucent,
 +                      base::OnceClosure on_finished);
 +  ~SwipePageTransition() override;
 +
@@ -1063,7 +1171,13 @@
 +  // Keeps the overlay above any view added by the navigation.
 +  void StackAtTop();
 +
++  // With translucent pages the real page is hidden while the overlay shows.
++  void HideLiveContent();
++  void RestoreLiveContent();
++
 +  const bool is_back_;
++  const bool translucent_;
++  bool live_content_hidden_ = false;
 +  const gfx::Rect bounds_;
 +  base::OnceClosure on_finished_;
 +
@@ -1080,6 +1194,9 @@
 +  // slides. Going back, the current page is on top and slides out to the
 +  // right, uncovering the previous page. Going forward, the next page is on
 +  // top and slides in from the right over the current page.
++  // Clips the page underneath to the strip the page on top has uncovered, so
++  // it never shows through the top page's transparent areas.
++  ui::LayerNotDrawn under_clip_;
 +  std::unique_ptr<SnapshotPaintLayer> under_;
 +  ui::LayerSolidColor dim_layer_;
 +  ui::LayerNotDrawn over_container_;
@@ -1096,7 +1213,7 @@
 +#endif  // CONTENT_BROWSER_WEB_CONTENTS_AURA_SWIPE_PAGE_TRANSITION_H_
 --- /dev/null
 +++ b/content/public/browser/swipe_page_preview.h
-@@ -0,0 +1,35 @@
+@@ -0,0 +1,45 @@
 +// Copyright 2026 The Helium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -1127,6 +1244,16 @@
 +  // Returns true if the page-slide preview is enabled for |web_contents|.
 +  // Returns false if no callback has been registered.
 +  static bool IsEnabled(WebContents* web_contents);
++
++  // Registers the embedder callback that reports whether pages of
++  // |web_contents| are shown translucent (e.g. the window lets the desktop
++  // show through transparent page backgrounds). While swiping, the slide is
++  // then drawn without an opaque background so it keeps that translucency.
++  static void SetTranslucentPagesCallback(EnabledCallback callback);
++
++  // Returns true if pages of |web_contents| are translucent. Returns false if
++  // no callback has been registered.
++  static bool AreTranslucentPagesEnabled(WebContents* web_contents);
 +};
 +
 +}  // namespace content

@@ -151,9 +151,11 @@ How it works, and its limits:
 - The page moves at 0.3× the swipe distance and follows your fingers across its
   full width. Whether a release navigates is still Chromium's rule (a fixed swipe
   distance, 30% of the screen size), not a fraction of how far the page has moved.
-- While you swipe, the page area is drawn from snapshots over a solid themed
-  background, so translucency is not shown inside the page area until the swipe
-  ends.
+- With **Transparent website backgrounds** on, the slide stays translucent: the
+  real page is hidden while snapshots stand in for it, no opaque background is
+  painted, and the page underneath is clipped to the strip the top page has
+  uncovered, so the desktop (not the other page) shows through transparent
+  areas. With it off, the slide is drawn over a solid themed background.
 
 ## Set the opacity
 
