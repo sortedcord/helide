@@ -1,0 +1,580 @@
+--- a/chrome/app/settings_strings.grdp
++++ b/chrome/app/settings_strings.grdp
+@@ -285,6 +285,30 @@
+     <message name="IDS_SETTINGS_NATIVE_FRAME_MATERIALS_DESCRIPTION" desc="Description for the toggle which enables native system materials on the browser frame.">
+       Applies native materials to the browser frame surfaces. May cause UI clarity issues.
+     </message>
++    <message name="IDS_SETTINGS_WAYLAND_FRAME_OPACITY" desc="Label for the slider which sets how opaque the browser frame is on Wayland.">
++      Browser window opacity
++    </message>
++    <message name="IDS_SETTINGS_WAYLAND_FRAME_OPACITY_DESCRIPTION" desc="Description for the slider which sets how opaque the browser frame is on Wayland.">
++      Lets the desktop show through the tab strip and toolbar. Text, icons and page content stay opaque.
++    </message>
++    <message name="IDS_SETTINGS_WAYLAND_FRAME_OPACITY_CLEAR" desc="Label at the low end of the browser window opacity slider.">
++      Clear
++    </message>
++    <message name="IDS_SETTINGS_WAYLAND_FRAME_OPACITY_OPAQUE" desc="Label at the high end of the browser window opacity slider.">
++      Opaque
++    </message>
++    <message name="IDS_SETTINGS_WAYLAND_FRAME_BLUR" desc="Label for the toggle which asks the Wayland compositor to blur the background behind the browser window.">
++      Blur behind the window
++    </message>
++    <message name="IDS_SETTINGS_WAYLAND_FRAME_BLUR_DESCRIPTION" desc="Description for the toggle which asks the Wayland compositor to blur the background behind the browser window.">
++      Asks your compositor to blur what is behind translucent areas. Blur strength is set by the compositor. Needs window opacity below 100% or transparent website backgrounds.
++    </message>
++    <message name="IDS_SETTINGS_WAYLAND_TRANSPARENT_WEB_CONTENT" desc="Label for the toggle which lets pages with transparent backgrounds show the desktop behind the browser on Wayland.">
++      Transparent website backgrounds
++    </message>
++    <message name="IDS_SETTINGS_WAYLAND_TRANSPARENT_WEB_CONTENT_DESCRIPTION" desc="Description for the toggle which lets pages with transparent backgrounds show the desktop behind the browser on Wayland.">
++      Lets pages with transparent backgrounds show the desktop. Sites that set an opaque background stay opaque.
++    </message>
+     <message name="IDS_SETTINGS_LAYOUT" desc="Title of the settings section which controls how the browser UI is laid out.">
+       Layout
+     </message>
+--- a/chrome/browser/extensions/api/settings_private/prefs_util.cc
++++ b/chrome/browser/extensions/api/settings_private/prefs_util.cc
+@@ -235,6 +235,12 @@
+       settings_api::PrefType::kBoolean;
+   (*s_allowlist)[::prefs::kHeliumNativeFrameMaterials] =
+       settings_api::PrefType::kBoolean;
++  (*s_allowlist)[::prefs::kHeliumWaylandFrameOpacity] =
++      settings_api::PrefType::kNumber;
++  (*s_allowlist)[::prefs::kHeliumWaylandFrameBlur] =
++      settings_api::PrefType::kBoolean;
++  (*s_allowlist)[::prefs::kHeliumWaylandTransparentWebContent] =
++      settings_api::PrefType::kBoolean;
+ 
+   // Miscellaneous
+   (*s_allowlist)[::embedder_support::kAlternateErrorPagesEnabled] =
+--- a/chrome/browser/helium_flag_entries.h
++++ b/chrome/browser/helium_flag_entries.h
+@@ -87,19 +87,22 @@
+     {helium::kHeliumFrameOpacityCommandLine, "Wayland frame opacity",
+      "Makes the browser frame translucent on native Wayland. Page content "
+      "stays opaque. Uses Helium's own title bar even if the system title bar "
+-     "is enabled. Experimental Helium flag.",
++     "is enabled. Overrides the Appearance setting; leave on Default to use "
++     "that setting. Experimental Helium flag.",
+      kOsLinux, MULTI_VALUE_TYPE(helium::kHeliumFrameOpacityChoices)},
+     {helium::kHeliumFrameBlurCommandLine, "Wayland frame blur",
+      "Requests compositor blur behind a translucent browser frame. Requires "
+      "Wayland background-effect support and frame or web transparency. "
+-     "Strength is controlled by the compositor. Requires relaunch.",
++     "Strength is controlled by the compositor. Overrides the Appearance "
++     "setting; leave on Default to use that setting. Requires relaunch.",
+      kOsLinux, MULTI_VALUE_TYPE(helium::kHeliumFrameBlurChoices)},
+     {helium::kHeliumTransparentWebContentCommandLine,
+      "Transparent web content on Wayland",
+      "Allows website backgrounds to show through when their CSS is "
+      "transparent. "
+      "Opaque site backgrounds remain opaque. Uses native Wayland compositing "
+-     "in normal browser windows. Requires relaunch.",
++     "in normal browser windows. Overrides the Appearance setting; leave on "
++     "Default to use that setting. Requires relaunch.",
+      kOsLinux, MULTI_VALUE_TYPE(helium::kHeliumTransparentWebContentChoices)},
+     // platform
+     {helium::kMiddleClickPasteEnabledCommandLine, "Middle Click Paste",
+--- a/chrome/browser/resources/settings/appearance_page/appearance_page.html.ts
++++ b/chrome/browser/resources/settings/appearance_page/appearance_page.html.ts
+@@ -76,6 +76,33 @@
+         label="$i18n{nativeFrameMaterials}"
+         sub-label="$i18n{nativeFrameMaterialsDescription}">
+     </settings-toggle-button>
++    ${this.showWaylandTransparencyOptions_ ? html`
++      <div class="cr-row hr" id="waylandFrameOpacityRow">
++        <div class="flex cr-padded-text">
++          <div aria-hidden="true">$i18n{waylandFrameOpacity}</div>
++          <div class="cr-secondary-text" aria-hidden="true">
++            $i18n{waylandFrameOpacityDescription}
++          </div>
++        </div>
++        <settings-slider id="waylandFrameOpacity"
++            pref-key="helium.browser.wayland_frame_opacity"
++            .ticks="${this.waylandFrameOpacityTicks_}"
++            label-aria="$i18n{waylandFrameOpacity}"
++            label-min="$i18n{waylandFrameOpacityClear}"
++            label-max="$i18n{waylandFrameOpacityOpaque}">
++        </settings-slider>
++      </div>
++      <settings-toggle-button class="hr" id="waylandFrameBlur"
++          pref-key="helium.browser.wayland_frame_blur"
++          label="$i18n{waylandFrameBlur}"
++          sub-label="$i18n{waylandFrameBlurDescription}">
++      </settings-toggle-button>
++      <settings-toggle-button class="hr" id="waylandTransparentWebContent"
++          pref-key="helium.browser.wayland_transparent_web_content"
++          label="$i18n{waylandTransparentWebContent}"
++          sub-label="$i18n{waylandTransparentWebContentDescription}">
++      </settings-toggle-button>
++    ` : ''}
+     <settings-toggle-button class="hr" elide-label
+         ?hidden="${!this.pageVisibility_.homeButton}"
+         pref-key="browser.show_home_button"
+--- a/chrome/browser/resources/settings/appearance_page/appearance_page.ts
++++ b/chrome/browser/resources/settings/appearance_page/appearance_page.ts
+@@ -8,6 +8,7 @@
+ import '../controls/controlled_radio_button.js';
+ import '/shared/settings/controls/extension_controlled_indicator.js';
+ import '../controls/settings_radio_group.js';
++import '../controls/settings_slider.js';
+ import '../controls/settings_toggle_button.js';
+ import '../settings_page/settings_section.js';
+ import './home_url_input.js';
+@@ -17,6 +18,7 @@
+ import {PrefServiceObserverMixinLit} from '/shared/settings/prefs2/pref_service_observer_mixin_lit.js';
+ import {browserProxyFactory, ColorSchemeMode} from 'chrome://resources/cr_components/customize_color_scheme_mode/customize_color_scheme_mode.mojom-webui.js';
+ import type {BrowserProxy as CustomizeColorSchemeModeBrowserProxy} from 'chrome://resources/cr_components/customize_color_scheme_mode/customize_color_scheme_mode.mojom-webui.js';
++import type {SliderTick} from 'chrome://resources/cr_elements/cr_slider/cr_slider.js';
+ import {I18nMixinLit} from 'chrome://resources/cr_elements/i18n_mixin_lit.js';
+ import {assert, assertNotReached} from 'chrome://resources/js/assert.js';
+ import {CrLitElement} from 'chrome://resources/lit/v3_0/lit.rollup.js';
+@@ -59,6 +61,14 @@
+ type PrefObject<T> = chrome.settingsPrivate.PrefObject<T>;
+ 
+ /**
++ * Ticks for the Wayland browser window opacity slider: 0% to 100% in 5%
++ * steps. The pref stores the percentage as an integer.
++ */
++const WAYLAND_FRAME_OPACITY_TICKS: SliderTick[] =
++    Array.from({length: 21}, (_, i) => i * 5)
++        .map(x => ({label: `${x}%`, value: x, ariaValue: undefined}));
++
++/**
+  * 'settings-appearance-page' is the settings page containing appearance
+  * settings.
+  */
+@@ -165,6 +175,8 @@
+       glassEffectOptions_: {type: Array},
+       tabStripOptions_: {type: Array},
+       showNativeFrameMaterialsOption_: {type: Boolean},
++      showWaylandTransparencyOptions_: {type: Boolean},
++      waylandFrameOpacityTicks_: {type: Array},
+       showGlassEffectEnabled_: {type: Boolean},
+       ntpSimplificationBookmarksBarEnabled_: {type: Boolean},
+       bookmarksBarOptions_: {type: Array},
+@@ -293,6 +305,10 @@
+   protected accessor showManagedThemeDialog_: boolean = false;
+   protected accessor showNativeFrameMaterialsOption_: boolean =
+       loadTimeData.getBoolean('showNativeFrameMaterialsOption');
++  protected accessor showWaylandTransparencyOptions_: boolean =
++      loadTimeData.getBoolean('showWaylandTransparencyOptions');
++  protected accessor waylandFrameOpacityTicks_: SliderTick[] =
++      WAYLAND_FRAME_OPACITY_TICKS;
+   protected accessor showGlassEffectEnabled_: boolean =
+       loadTimeData.getBoolean('showGlassEffectEnabled');
+   protected accessor ntpSimplificationBookmarksBarEnabled_: boolean =
+--- a/chrome/browser/ui/browser_ui_prefs.cc
++++ b/chrome/browser/ui/browser_ui_prefs.cc
+@@ -137,6 +137,11 @@
+ 
+   registry->RegisterBooleanPref(prefs::kHeliumNativeFrameMaterials, false);
+ 
++  registry->RegisterIntegerPref(prefs::kHeliumWaylandFrameOpacity, 100);
++  registry->RegisterBooleanPref(prefs::kHeliumWaylandFrameBlur, false);
++  registry->RegisterBooleanPref(prefs::kHeliumWaylandTransparentWebContent,
++                                false);
++
+   registry->RegisterBooleanPref(prefs::kHeliumCenteredLocationBar, false);
+ 
+   registry->RegisterBooleanPref(prefs::kHeliumMinimalLocationBar, false);
+--- a/chrome/browser/ui/views/frame/browser_desktop_window_tree_host_linux.cc
++++ b/chrome/browser/ui/views/frame/browser_desktop_window_tree_host_linux.cc
+@@ -207,10 +207,8 @@
+ 
+     std::vector<gfx::Rect> blur_region;
+     const bool request_blur =
+-        helium::ShouldUseWaylandFrameOpacity(browser_view_) &&
+-        !browser_widget_->IsFullscreen() &&
+-        base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
+-            "helium-frame-blur") == "1";
++        helium::ShouldRequestWaylandFrameBlur(browser_view_) &&
++        !browser_widget_->IsFullscreen();
+     if (request_blur) {
+       // Opaque content covers the effect. Limit the outer shape to the client
+       // frame so compositor blur does not extend behind invisible shadows.
+--- a/chrome/browser/ui/views/frame/browser_frame_view_linux.cc
++++ b/chrome/browser/ui/views/frame/browser_frame_view_linux.cc
+@@ -92,6 +92,7 @@
+     cc::PaintFlags flags;
+     flags.setAntiAlias(true);
+     flags.setColor(helium::GetWaylandFrameTint(
++        GetBrowserView(),
+         GetFrameColor(BrowserFrameActiveState::kUseCurrent)));
+     canvas->sk_canvas()->drawRRect(GetRestoredClipRegion(), flags);
+   }
+--- a/chrome/browser/ui/views/frame/browser_native_widget_aura_linux.cc
++++ b/chrome/browser/ui/views/frame/browser_native_widget_aura_linux.cc
+@@ -28,6 +28,18 @@
+       base::BindRepeating(
+           &BrowserNativeWidgetAuraLinux::OnUseCustomChromeFrameChanged,
+           base::Unretained(this)));
++
++  helium_transparency_registrar_.Init(
++      browser_view->browser()->GetProfile()->GetPrefs());
++  for (const char* pref_name : {prefs::kHeliumWaylandFrameOpacity,
++                                prefs::kHeliumWaylandFrameBlur,
++                                prefs::kHeliumWaylandTransparentWebContent}) {
++    helium_transparency_registrar_.Add(
++        pref_name,
++        base::BindRepeating(
++            &BrowserNativeWidgetAuraLinux::OnHeliumTransparencyPrefChanged,
++            base::Unretained(this)));
++  }
+ }
+ 
+ BrowserNativeWidgetAuraLinux::~BrowserNativeWidgetAuraLinux() = default;
+@@ -122,6 +134,21 @@
+   return host_->SupportsClientFrameShadow() && UseCustomFrame();
+ }
+ 
++void BrowserNativeWidgetAuraLinux::OnHeliumTransparencyPrefChanged() {
++  if (!browser_widget() || !host_ ||
++      !ui::OzonePlatform::RunningOnWaylandForTest()) {
++    return;
++  }
++
++  // A translucent frame needs client-side decorations, so the frame type may
++  // flip. This also recomputes the opaque and blur regions through
++  // UpdateFrameHints().
++  OnUseCustomChromeFrameChanged();
++
++  // Page backgrounds, tab and infobar fills, and the frame tint.
++  helium::RefreshWaylandTransparency(browser_view());
++}
++
+ void BrowserNativeWidgetAuraLinux::OnUseCustomChromeFrameChanged() {
+   if (!browser_widget()) {
+     return;
+--- a/chrome/browser/ui/views/frame/browser_native_widget_aura_linux.h
++++ b/chrome/browser/ui/views/frame/browser_native_widget_aura_linux.h
+@@ -8,6 +8,7 @@
+ #include "base/gtest_prod_util.h"
+ #include "base/memory/raw_ptr.h"
+ #include "chrome/browser/ui/views/frame/browser_native_widget_aura.h"
++#include "components/prefs/pref_change_registrar.h"
+ #include "components/prefs/pref_member.h"
+ 
+ class BrowserDesktopWindowTreeHostLinux;
+@@ -45,9 +46,16 @@
+   // Called when the preference changes.
+   void OnUseCustomChromeFrameChanged();
+ 
++  // Called when a Helium Wayland transparency preference changes (frame
++  // opacity, blur or transparent web content). Applies it to the live window.
++  void OnHeliumTransparencyPrefChanged();
++
+   // Whether the custom Chrome frame preference is set.
+   BooleanPrefMember use_custom_frame_pref_;
+ 
++  // Observes the Helium Wayland transparency preferences.
++  PrefChangeRegistrar helium_transparency_registrar_;
++
+   raw_ptr<BrowserDesktopWindowTreeHostLinux> host_ = nullptr;
+ };
+ 
+--- a/chrome/browser/ui/views/frame/opaque_browser_frame_view.cc
++++ b/chrome/browser/ui/views/frame/opaque_browser_frame_view.cc
+@@ -717,8 +717,9 @@
+     if (IsFrameCondensed()) {
+       gfx::ScopedCanvas tint_canvas(canvas);
+       helium::ClipWaylandWebContents(canvas, GetBrowserView(), this);
+-      canvas->FillRect(GetLocalBounds(),
+-                       helium::GetWaylandFrameTint(frame_color));
++      canvas->FillRect(
++          GetLocalBounds(),
++          helium::GetWaylandFrameTint(GetBrowserView(), frame_color));
+     } else {
+       // BrowserFrameViewLinux paints the tint inside the window shape and
+       // keeps the window edge and client-side shadow.
+--- a/chrome/browser/ui/views/helium/native_frame_materials.cc
++++ b/chrome/browser/ui/views/helium/native_frame_materials.cc
+@@ -4,18 +4,22 @@
+ 
+ #include "chrome/browser/ui/views/helium/native_frame_materials.h"
+ 
++#include <algorithm>
+ #include <cmath>
++#include <optional>
+ 
+ #include "base/command_line.h"
+ #include "base/strings/string_number_conversions.h"
+ #include "build/build_config.h"
+ #include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/tabs/tab_strip_model.h"
+ #include "chrome/browser/ui/ui_features.h"
+ #include "chrome/browser/ui/views/frame/browser_view.h"
+ #include "chrome/browser/ui/views/frame/contents_web_view.h"
+ #include "chrome/common/pref_names.h"
+ #include "components/prefs/pref_service.h"
++#include "content/public/browser/web_contents.h"
+ #include "ui/gfx/canvas.h"
+ #include "ui/gfx/geometry/skia_conversions.h"
+ #include "ui/views/view.h"
+@@ -30,29 +34,67 @@
+ 
+ namespace {
+ 
+-double GetWaylandFrameOpacity() {
+ #if BUILDFLAG(IS_LINUX)
+-  // Every caller holds a live BrowserView, so about:flags entries have
+-  // already been converted to switches and the Ozone backend is selected.
+-  static const double opacity = [] {
+-    // RunningOnWaylandForTest() reports the backend Ozone selected; the public
+-    // Ozone API has no backend-name query without the ForTest suffix.
+-    if (!ui::OzonePlatform::RunningOnWaylandForTest()) {
+-      return 1.0;
+-    }
+-    // helium::kHeliumFrameOpacityCommandLine, spelled out like the other
+-    // Helium flag consumers do.
++// Each setting has a Settings page pref and a command-line switch. The
++// switches (also reachable from helium://flags) override the prefs, so
++// scripted launches and tests keep working. They are spelled out like the
++// other Helium flag consumers do.
++constexpr char kFrameOpacitySwitch[] = "helium-frame-opacity";
++constexpr char kFrameBlurSwitch[] = "helium-frame-blur";
++constexpr char kTransparentWebContentSwitch[] =
++    "helium-transparent-web-content";
++
++// RunningOnWaylandForTest() reports the backend Ozone selected; the public
++// Ozone API has no backend-name query without the ForTest suffix.
++bool IsWaylandBackend() {
++  return ui::OzonePlatform::RunningOnWaylandForTest();
++}
++
++const PrefService* GetPrefs(const BrowserView* browser_view) {
++  const Profile* profile = browser_view ? browser_view->GetProfile() : nullptr;
++  return profile ? profile->GetPrefs() : nullptr;
++}
++
++// Returns the switch as a boolean when it is present, "1" being true, or
++// otherwise the value of `pref`.
++bool GetBooleanSwitchOrPref(const BrowserView* browser_view,
++                            const char* switch_name,
++                            const char* pref_name) {
++  const base::CommandLine* command_line =
++      base::CommandLine::ForCurrentProcess();
++  if (command_line->HasSwitch(switch_name)) {
++    return command_line->GetSwitchValueASCII(switch_name) == "1";
++  }
++  const PrefService* prefs = GetPrefs(browser_view);
++  return prefs && prefs->GetBoolean(pref_name);
++}
++#endif  // BUILDFLAG(IS_LINUX)
++
++double GetWaylandFrameOpacity(const BrowserView* browser_view) {
++#if BUILDFLAG(IS_LINUX)
++  if (!browser_view || !IsWaylandBackend()) {
++    return 1.0;
++  }
++  const base::CommandLine* command_line =
++      base::CommandLine::ForCurrentProcess();
++  if (command_line->HasSwitch(kFrameOpacitySwitch)) {
++    // Malformed, nonfinite and out-of-range switch values mean opaque.
+     double value = 1.0;
+     if (!base::StringToDouble(
+-            base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
+-                "helium-frame-opacity"),
+-            &value) ||
++            command_line->GetSwitchValueASCII(kFrameOpacitySwitch), &value) ||
+         !std::isfinite(value) || value < 0.0 || value > 1.0) {
+       return 1.0;
+     }
+     return value;
+-  }();
+-  return opacity;
++  }
++  const PrefService* prefs = GetPrefs(browser_view);
++  if (!prefs) {
++    return 1.0;
++  }
++  // The pref is an integer percentage.
++  return std::clamp(prefs->GetInteger(prefs::kHeliumWaylandFrameOpacity), 0,
++                    100) /
++         100.0;
+ #else
+   return 1.0;
+ #endif
+@@ -63,21 +105,62 @@
+ bool ShouldUseWaylandFrameOpacity(const BrowserView* browser_view) {
+   // App, popup, devtools and picture-in-picture windows keep their own frames.
+   return browser_view && browser_view->GetIsNormalType() &&
+-         (GetWaylandFrameOpacity() < 1.0 ||
++         (GetWaylandFrameOpacity(browser_view) < 1.0 ||
+           ShouldAllowWaylandWebTransparency(browser_view));
+ }
+ 
++bool ShouldRequestWaylandFrameBlur(const BrowserView* browser_view) {
++#if BUILDFLAG(IS_LINUX)
++  return ShouldUseWaylandFrameOpacity(browser_view) &&
++         GetBooleanSwitchOrPref(browser_view, kFrameBlurSwitch,
++                                prefs::kHeliumWaylandFrameBlur);
++#else
++  return false;
++#endif
++}
++
+ bool ShouldAllowWaylandWebTransparency(const BrowserView* browser_view) {
+ #if BUILDFLAG(IS_LINUX)
+   return browser_view && browser_view->GetIsNormalType() &&
+-         ui::OzonePlatform::RunningOnWaylandForTest() &&
+-         base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
+-             "helium-transparent-web-content") == "1";
++         IsWaylandBackend() &&
++         GetBooleanSwitchOrPref(browser_view, kTransparentWebContentSwitch,
++                                prefs::kHeliumWaylandTransparentWebContent);
+ #else
+   return false;
+ #endif
+ }
+ 
++void RefreshWaylandTransparency(BrowserView* browser_view) {
++#if BUILDFLAG(IS_LINUX)
++  if (!browser_view || !browser_view->GetIsNormalType() ||
++      !IsWaylandBackend()) {
++    return;
++  }
++  // The default page background lives on each tab's WebContents so hidden tabs
++  // and future renderers inherit it. Update every tab, not only visible ones.
++  const std::optional<SkColor> base_color =
++      ShouldAllowWaylandWebTransparency(browser_view)
++          ? std::optional<SkColor>(SK_ColorTRANSPARENT)
++          : std::nullopt;
++  if (BrowserWindowInterface* browser = browser_view->browser()) {
++    TabStripModel* model = browser->GetTabStripModel();
++    for (int i = 0; i < model->count(); ++i) {
++      if (content::WebContents* contents = model->GetWebContentsAt(i)) {
++        contents->SetPageBaseBackgroundColor(base_color);
++      }
++    }
++  }
++  if (views::Widget* widget = browser_view->GetWidget()) {
++    // Frame tab fills, infobars, page backings and the multi-contents
++    // background all re-evaluate the settings above in OnThemeChanged().
++    widget->ThemeChanged();
++    if (widget->non_client_view()) {
++      widget->non_client_view()->SchedulePaint();
++    }
++  }
++#endif
++}
++
+ bool ShouldAllowWaylandWebTransparency(const views::View* view) {
+   const views::Widget* widget = view ? view->GetWidget() : nullptr;
+   return ShouldAllowWaylandWebTransparency(
+@@ -115,10 +198,11 @@
+   }
+ }
+ 
+-SkColor GetWaylandFrameTint(SkColor frame_color) {
+-  return SkColorSetA(
+-      frame_color,
+-      static_cast<U8CPU>(std::lround(GetWaylandFrameOpacity() * 255.0)));
++SkColor GetWaylandFrameTint(const BrowserView* browser_view,
++                            SkColor frame_color) {
++  return SkColorSetA(frame_color,
++                     static_cast<U8CPU>(std::lround(
++                         GetWaylandFrameOpacity(browser_view) * 255.0)));
+ }
+ 
+ bool ShouldUseNativeFrameMaterials(const BrowserView* browser_view) {
+--- a/chrome/browser/ui/views/helium/native_frame_materials.h
++++ b/chrome/browser/ui/views/helium/native_frame_materials.h
+@@ -20,13 +20,23 @@
+ 
+ namespace helium {
+ 
+-// Experimental, Linux only. --helium-frame-opacity=<0..1> makes the frame of
+-// normal browser windows translucent on the Wayland backend. Missing or
+-// invalid values, other backends and other window types keep an opaque frame.
++// Experimental, Linux only. The frame opacity setting (Appearance settings, or
++// --helium-frame-opacity=<0..1>, which takes precedence) makes the frame of
++// normal browser windows translucent on the Wayland backend. Invalid switch
++// values, other backends and other window types keep an opaque frame.
+ // Web content remains opaque unless its separate transparency option is
+ // enabled.
+ bool ShouldUseWaylandFrameOpacity(const BrowserView* browser_view);
+ 
++// Whether the window should request compositor background blur: the blur
++// setting (or --helium-frame-blur=1) on a window that is otherwise translucent.
++bool ShouldRequestWaylandFrameBlur(const BrowserView* browser_view);
++
++// Re-applies the transparency settings to a live window after one of them
++// changed: resets each tab's default page background, then re-runs theme and
++// paint hooks. The caller updates the frame type and window hints.
++void RefreshWaylandTransparency(BrowserView* browser_view);
++
+ // Permit page alpha only for normal windows on the native Wayland backend.
+ bool ShouldAllowWaylandWebTransparency(const BrowserView* browser_view);
+ bool ShouldAllowWaylandWebTransparency(const views::View* view);
+@@ -39,7 +49,8 @@
+ void ScheduleWaylandFramePaint(views::View* view);
+ 
+ // Returns `frame_color` with the requested frame opacity as its alpha.
+-SkColor GetWaylandFrameTint(SkColor frame_color);
++SkColor GetWaylandFrameTint(const BrowserView* browser_view,
++                            SkColor frame_color);
+ 
+ bool ShouldUseNativeFrameMaterials(const BrowserView* browser_view);
+ bool ShouldUseNativeFrameMaterials(const BrowserWindowInterface* browser);
+--- a/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
++++ b/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
+@@ -611,6 +611,18 @@
+       {"nativeFrameMaterials", IDS_SETTINGS_NATIVE_FRAME_MATERIALS},
+       {"nativeFrameMaterialsDescription",
+        IDS_SETTINGS_NATIVE_FRAME_MATERIALS_DESCRIPTION},
++      {"waylandFrameOpacity", IDS_SETTINGS_WAYLAND_FRAME_OPACITY},
++      {"waylandFrameOpacityDescription",
++       IDS_SETTINGS_WAYLAND_FRAME_OPACITY_DESCRIPTION},
++      {"waylandFrameOpacityClear", IDS_SETTINGS_WAYLAND_FRAME_OPACITY_CLEAR},
++      {"waylandFrameOpacityOpaque", IDS_SETTINGS_WAYLAND_FRAME_OPACITY_OPAQUE},
++      {"waylandFrameBlur", IDS_SETTINGS_WAYLAND_FRAME_BLUR},
++      {"waylandFrameBlurDescription",
++       IDS_SETTINGS_WAYLAND_FRAME_BLUR_DESCRIPTION},
++      {"waylandTransparentWebContent",
++       IDS_SETTINGS_WAYLAND_TRANSPARENT_WEB_CONTENT},
++      {"waylandTransparentWebContentDescription",
++       IDS_SETTINGS_WAYLAND_TRANSPARENT_WEB_CONTENT_DESCRIPTION},
+       {"layoutPageTitle", IDS_SETTINGS_LAYOUT},
+       {"browserLayout", IDS_SETTINGS_BROWSER_LAYOUT},
+       {"browserLayoutClassic", IDS_SETTINGS_BROWSER_LAYOUT_CLASSIC},
+@@ -722,6 +734,15 @@
+ 
+   html_source->AddBoolean("showNativeFrameMaterialsOption",
+                           features::HeliumNativeFrameAvailable());
++  // The translucent frame, blur and transparent page options only apply to the
++  // native Wayland backend; X11 and other platforms never show them.
++  bool show_wayland_transparency_options = false;
++#if BUILDFLAG(IS_LINUX)
++  show_wayland_transparency_options =
++      ui::OzonePlatform::RunningOnWaylandForTest();
++#endif
++  html_source->AddBoolean("showWaylandTransparencyOptions",
++                          show_wayland_transparency_options);
+   html_source->AddBoolean("showCtrlTabMru",
+                           base::FeatureList::IsEnabled(features::kCtrlTabMru));
+   html_source->AddBoolean(
+--- a/chrome/common/pref_names.h
++++ b/chrome/common/pref_names.h
+@@ -627,6 +627,21 @@
+ inline constexpr char kHeliumNativeFrameMaterials[] =
+     "helium.browser.native_frame_materials";
+ 
++// Linux (Wayland) only. An integer pref in [0, 100]: the opacity, in percent,
++// of the browser frame. 100 keeps the frame opaque.
++inline constexpr char kHeliumWaylandFrameOpacity[] =
++    "helium.browser.wayland_frame_opacity";
++
++// Linux (Wayland) only. A boolean pref set to true if the browser window should
++// request compositor background blur behind its translucent areas.
++inline constexpr char kHeliumWaylandFrameBlur[] =
++    "helium.browser.wayland_frame_blur";
++
++// Linux (Wayland) only. A boolean pref set to true if web content should be
++// allowed to show transparent page backgrounds.
++inline constexpr char kHeliumWaylandTransparentWebContent[] =
++    "helium.browser.wayland_transparent_web_content";
++
+ // An enum (HeliumLayoutType) pref that controls the browser layout.
+ inline constexpr char kHeliumLayout[] = "helium.browser.layout";
+ 

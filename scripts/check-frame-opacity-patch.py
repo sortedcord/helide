@@ -41,6 +41,7 @@ def main():
             "helium/linux/wayland-frame-blur.patch",
             "helium/linux/wayland-web-content-transparency.patch",
             "helium/linux/wayland-web-content-lifecycle.patch",
+            "helium/linux/wayland-settings.patch",
         ],
     )
     selected = parser.parse_args().patch

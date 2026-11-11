@@ -11,9 +11,10 @@ colors and suitable CSS gradient stops, rather than fading whole elements.
 
 ## Install
 
-1. Enable **Transparent web content on Wayland** at
-   `helium://flags/#helium-transparent-web-content` and relaunch this fork.
-   Alternatively, launch with `--helium-transparent-web-content=1` on Wayland.
+1. Turn on **Settings → Appearance → Transparent website backgrounds** in this
+   fork (no relaunch needed). Alternatively, enable **Transparent web content on
+   Wayland** at `helium://flags/#helium-transparent-web-content` and relaunch,
+   or launch with `--helium-transparent-web-content=1` on Wayland.
 2. Open `helium://extensions` (or `chrome://extensions`) and enable
    **Developer mode**.
 3. Click **Load unpacked** and select this directory, `extensions/helium-glass`,
@@ -27,8 +28,8 @@ rebuild, package manager, bundler, account, or network service is needed.
 In regular Chrome/Helium, it can change CSS fills but cannot make the browser's
 opaque page backing show the desktop.
 
-Optional compositor blur is controlled by Helium's separate
-`--helium-frame-blur=1` setting. This extension does not set the compositor's
+Optional compositor blur is controlled by Helium's separate **Blur behind the
+window** setting (or `--helium-frame-blur=1`). This extension does not set the compositor's
 blur radius or change your browser launch settings.
 
 ## Configure

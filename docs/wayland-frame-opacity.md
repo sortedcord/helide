@@ -3,17 +3,19 @@
 This Linux patch targets Helium 0.20.3.1, its pinned shared patch commit
 `2f81b9cafa38a95071e20de3f9cd6b0aca6d3c65`, and Chromium 156.0.8078.79.
 
-After a future build, choose an opacity in
-`helium://flags/#helium-frame-opacity` and relaunch. The choices range from a
-fully opaque frame to a clear frame. Default preserves normal Helium rendering.
-For arbitrary values, launch the resulting browser with:
+After a future build, choose an opacity with **Settings → Appearance → Browser
+window opacity** (applied live), or in `helium://flags/#helium-frame-opacity` and
+relaunch. The choices range from a fully opaque frame to a clear frame. Default
+preserves normal Helium rendering. The flag and the switch below override the
+Setting. For arbitrary values, launch the resulting browser with:
 
 ```sh
 helium --ozone-platform=wayland --helium-frame-opacity=0.8
 ```
 
 The value is a finite number from 0 through 1: 0.8 means 80% opacity.
-Missing, malformed, nonfinite, and out-of-range values fall back to 1.
+Malformed, nonfinite, and out-of-range switch values fall back to 1. With no
+switch, the Settings value is used.
 The control takes effect at launch, so close the existing browser process first,
 or use a separate development profile. This option controls the frame background;
 tab text, icons, and web content retain their normal opacity.
@@ -86,6 +88,7 @@ Protocol and source references:
 
 ```sh
 python3 scripts/check-frame-opacity-patch.py
+python3 scripts/check-frame-opacity-patch.py --patch helium/linux/wayland-settings.patch
 git diff --check
 ```
 

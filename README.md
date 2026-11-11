@@ -23,8 +23,9 @@ is available on compositors supporting `ext-background-effect-v1`.
 
 The Linux patch is [`patches/helium/linux/wayland-frame-opacity.patch`](patches/helium/linux/wayland-frame-opacity.patch), registered in `patches/series`.
 
-- Adds an opacity control to `helium://flags` and the launch
-  switch `--helium-frame-opacity=VALUE`.
+- Adds an opacity control to **Settings → Appearance**, applied live, plus
+  `helium://flags` and the launch switch `--helium-frame-opacity=VALUE`, which
+  take precedence. See [Settings](#settings).
 - Reuses Helium's native material hooks to let the browser UI backgrounds
   show through. On Linux, ordinary browser windows paint one theme-colored
   tint at the requested alpha. Caption text and icons stay opaque.
@@ -45,6 +46,10 @@ The Linux patch is [`patches/helium/linux/wayland-frame-opacity.patch`](patches/
   With that option enabled, the browser clears its page backing and renderer
   default background to transparent. Rounded page shapes are excluded from the
   browser UI tint, including in split views. Website CSS is not rewritten.
+- Adds [Settings → Appearance controls](#settings) for opacity, blur, and website
+  transparency, stored as per-profile prefs, in
+  [`wayland-settings.patch`](patches/helium/linux/wayland-settings.patch). Changes
+  apply to open windows without a relaunch.
 
 The shared Helium [native materials patch](helium-chromium/patches/helium/ui/native-frame-materials.patch) contains the existing UI painting hooks. The Linux patches extend those hooks with Wayland compositing and website transparency.
 
@@ -82,14 +87,42 @@ python3 scripts/check-frame-opacity-patch.py
 python3 scripts/check-frame-opacity-patch.py --patch helium/linux/wayland-frame-blur.patch
 python3 scripts/check-frame-opacity-patch.py --patch helium/linux/wayland-web-content-transparency.patch
 python3 scripts/check-frame-opacity-patch.py --patch helium/linux/wayland-web-content-lifecycle.patch
+python3 scripts/check-frame-opacity-patch.py --patch helium/linux/wayland-settings.patch
 ```
+
+## Settings
+
+On native Wayland, **Settings → Appearance** shows three controls, below the
+rounded-frame option. They are hidden on X11 and other platforms.
+
+| Control | Range | Default |
+|---|---|---|
+| **Browser window opacity** | Slider, 0–100% in 5% steps | 100% |
+| **Blur behind the window** | Toggle | Off |
+| **Transparent website backgrounds** | Toggle | Off |
+
+They are per-profile prefs (`helium.browser.wayland_frame_opacity`,
+`helium.browser.wayland_frame_blur`, and
+`helium.browser.wayland_transparent_web_content`). Changing one applies to every
+open window of that profile, with no relaunch: the frame type, opaque and blur
+regions, each tab's default page background, and the frame tint are refreshed.
+Blur strength cannot be set here, because the Wayland protocol exposes none; set
+it in your compositor (see [blur strength on niri](#blur-strength-on-niri)).
+
+The launch switches and `helium://flags` entries below still work and **override**
+the Settings values when present, which is useful for scripted or test launches.
+Leave a flag on **Default** to use the Settings value. If an opacity flag was
+previously enabled in `helium://flags`, reset it to Default so the Settings slider
+can take effect. Flags and switches are read at startup.
+
 
 ## Set the opacity
 
-Open `helium://flags/#helium-frame-opacity`, choose an opacity, and relaunch the
+Use **Settings → Appearance → Browser window opacity**, or open
+`helium://flags/#helium-frame-opacity`, choose an opacity, and relaunch the
 browser. Available values range from fully opaque to clear. At `0`, the browser UI
 background tint is invisible while text, icons, and controls remain visible.
-The default choice is fully opaque.
+The default is fully opaque.
 
 Alternatively, pass an opacity at launch:
 
@@ -98,10 +131,10 @@ helium --ozone-platform=wayland --helium-frame-opacity=0.8
 ```
 
 The value is a number from `0` to `1`; for example, `0.8` means 80% opacity.
-Missing, malformed, nonfinite, or out-of-range values fall back to fully opaque.
-The setting is read at startup, so close the existing Helium process before
-relaunching. For the development build, the executable is
-`build/src/out/Default/helium`.
+Malformed, nonfinite, or out-of-range switch values fall back to fully opaque.
+With no switch, the Settings value is used. The switch is read at startup, so
+close the existing Helium process before relaunching. For the development build,
+the executable is `build/src/out/Default/helium`.
 
 Only the browser UI background uses this opacity. Web content remains opaque unless
 its separate transparency option is enabled. Custom theme background
@@ -110,7 +143,8 @@ may retain their own backgrounds.
 
 ## Enable or disable blur
 
-Open `helium://flags/#helium-frame-blur`, choose **Enabled** or **Disabled**, and
+Turn on **Settings → Appearance → Blur behind the window**, or open
+`helium://flags/#helium-frame-blur`, choose **Enabled** or **Disabled**, and
 relaunch. Default makes no blur request. Enable browser UI or website transparency
 so the effect can be seen. For example:
 
@@ -146,12 +180,38 @@ blur broader without adding passes; increasing `passes` can smooth a broader
 blur but costs more GPU work. Large offsets can produce artifacts. Niri's
 global `blur { off }` disables blur even if Helium requests it.
 
-See [niri's blur configuration](https://github.com/niri-wm/niri/wiki/Configuration%3A-Miscellaneous#blur)
+#### Tips for niri users
+
+- **Blur windows instead of wallpaper:** By default, niri enables `xray` on
+  any background effect, which blurs the desktop wallpaper rather than the
+  windows stacked underneath Helium. To blur windows behind Helium, add a
+  window rule with `xray false` to `~/.config/niri/config.kdl`:
+  ```kdl
+  window-rule {
+      match app-id="^helium$"
+      background-effect {
+          xray false
+      }
+  }
+  ```
+- **Prevent border/focus ring tint bleed:** Niri normally draws focus rings
+  and borders with a solid background behind client-side decorated windows.
+  To prevent this solid color from tinting the translucent frame:
+  ```kdl
+  window-rule {
+      match app-id="^helium$"
+      draw-border-with-background false
+  }
+  ```
+
+See [niri's blur configuration](https://github.com/niri-wm/niri/wiki/Configuration%3A-Miscellaneous#blur),
+[niri's window effects](https://github.com/niri-wm/niri/wiki/Window-Effects),
 and the [Wayland background-effect protocol](https://wayland.app/protocols/ext-background-effect-v1).
 
 ## Transparent website backgrounds
 
-Enable **Transparent web content on Wayland** at
+Turn on **Settings → Appearance → Transparent website backgrounds**, or enable
+**Transparent web content on Wayland** at
 `helium://flags/#helium-transparent-web-content` and relaunch. Alternatively:
 
 ```sh
