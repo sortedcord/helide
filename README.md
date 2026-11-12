@@ -231,6 +231,7 @@ python3 scripts/check-frame-opacity-patch.py --patch helium/linux/wayland-fullsc
 python3 scripts/check-frame-opacity-patch.py --patch helium/linux/helium-agent-access.patch
 python3 scripts/check-frame-opacity-patch.py --patch helium/linux/helium-target-march.patch
 python3 scripts/check-frame-opacity-patch.py --patch helium/linux/helide-branding.patch
+python3 scripts/check-frame-opacity-patch.py --patch helium/linux/linux-window-close-toggle.patch
 ```
 
 To turn edits made in `build/src` into a patch against the pinned upstream
@@ -277,6 +278,27 @@ Leave a flag on **Default** to use the Settings value. If an opacity flag was
 previously enabled in `helium://flags`, reset it to Default so the Settings slider
 can take effect. Flags and switches are read at startup.
 
+
+### Window close button
+
+In **Settings → Appearance → Customize toolbar**, toggle **Show window close
+button** to show or hide the window's “×” control. It defaults to on, is saved
+per profile, and applies live to normal Linux browser windows. Hiding it removes
+its caption-button space too; **Reset to default** brings it back.
+
+This does not affect individual tabs' close buttons, app/popup windows, keyboard
+shortcuts or compositor close commands. It controls browser-drawn client-side
+buttons, not decorations owned by the compositor.
+
+Implementation: [`linux-window-close-toggle.patch`](patches/helium/linux/linux-window-close-toggle.patch).
+The isolated WebUI/persistence test uses the Playwright dependency from `mcp/`:
+
+```sh
+node scripts/test-window-close-toggle.mjs
+```
+
+It uses a temporary headless profile; visual button placement still needs a
+Wayland window check.
 
 ## Let AI agents control Helide
 

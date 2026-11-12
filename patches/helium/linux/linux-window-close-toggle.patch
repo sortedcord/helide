@@ -1,0 +1,345 @@
+--- a/chrome/browser/ui/browser_ui_prefs.cc
++++ b/chrome/browser/ui/browser_ui_prefs.cc
+@@ -14,6 +14,7 @@
+ #include "chrome/browser/ui/ui_features.h"
+ #include "chrome/browser/upgrade_detector/upgrade_detector.h"
+ #include "chrome/common/buildflags.h"
++#include "chrome/common/helium_window_controls_prefs.h"
+ #include "chrome/common/pref_names.h"
+ #include "components/helium_services/pref_names.h"
+ #include "components/policy/core/common/policy_pref_names.h"
+@@ -173,6 +174,7 @@
+   registry->RegisterBooleanPref(prefs::kShowAvatarButton, true);
+   registry->RegisterBooleanPref(prefs::kShowExtensionsButton, true);
+   registry->RegisterBooleanPref(prefs::kShowMenuButton, true);
++  registry->RegisterBooleanPref(helium::kShowWindowCloseButton, true);
+   registry->RegisterBooleanPref(prefs::kShowMediaButton, true);
+   registry->RegisterBooleanPref(prefs::kShowVerticalTabsCollapseButton, true);
+   registry->RegisterBooleanPref(prefs::kShowDynamicNewTabButton, true);
+--- a/chrome/browser/ui/views/frame/BUILD.gn
++++ b/chrome/browser/ui/views/frame/BUILD.gn
+@@ -2081,8 +2081,12 @@
+       ":browser_native_widget_aura_linux",
+       "//base:i18n",
+       "//build:buildflag_header_h",
++      "//chrome/browser/profiles:profile",
++      "//chrome/browser/ui/browser_window",
+       "//chrome/browser/ui/views:layout_provider",
+       "//chrome/browser/ui/views/frame:browser_view_header",
++      "//chrome/common:constants",
++      "//components/prefs",
+       "//ui/base",
+       "//ui/views",
+     ]
+--- a/chrome/browser/ui/views/frame/browser_frame_view_linux.cc
++++ b/chrome/browser/ui/views/frame/browser_frame_view_linux.cc
+@@ -4,12 +4,20 @@
+ 
+ #include "chrome/browser/ui/views/frame/browser_frame_view_linux.h"
+ 
++#include <algorithm>
++
++#include "base/functional/bind.h"
+ #include "base/notreached.h"
+ #include "cc/paint/paint_flags.h"
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/views/chrome_layout_provider.h"
+ #include "chrome/browser/ui/views/frame/browser_native_widget_aura_linux.h"
+ #include "chrome/browser/ui/views/frame/browser_view.h"
+ #include "chrome/browser/ui/views/helium/native_frame_materials.h"
++#include "chrome/common/helium_window_controls_prefs.h"
++#include "components/prefs/pref_change_registrar.h"
++#include "components/prefs/pref_service.h"
+ #include "ui/base/hit_test.h"
+ #include "ui/base/metadata/metadata_impl_macros.h"
+ #include "ui/gfx/canvas.h"
+@@ -30,6 +38,23 @@
+ // bottom resize borders.
+ constexpr int kResizeTopBorderThickness = 4;
+ 
++bool ShouldShowWindowCloseButton(BrowserView* browser_view) {
++  // Popups and app windows keep their close control regardless of the toolbar
++  // preference. Compositor-owned server decorations are outside our control.
++  return browser_view->browser()->GetType() !=
++             BrowserWindowInterface::TYPE_NORMAL ||
++         browser_view->GetProfile()->GetPrefs()->GetBoolean(
++             helium::kShowWindowCloseButton);
++}
++
++bool HasCaptionButtons(const std::vector<views::FrameButton>& buttons,
++                       BrowserView* browser_view) {
++  const bool show_close = ShouldShowWindowCloseButton(browser_view);
++  return std::ranges::any_of(buttons, [show_close](views::FrameButton button) {
++    return show_close || button != views::FrameButton::kClose;
++  });
++}
++
+ }  // namespace
+ 
+ BrowserFrameViewLinux::BrowserFrameViewLinux(
+@@ -38,10 +63,18 @@
+     BrowserFrameViewLayoutLinux* layout)
+     : OpaqueBrowserFrameView(widget, browser_view, layout), layout_(layout) {
+   layout->set_view(this);
++  if (browser_view->browser()->GetType() == BrowserWindowInterface::TYPE_NORMAL) {
++    window_controls_pref_registrar_ = std::make_unique<PrefChangeRegistrar>();
++    window_controls_pref_registrar_->Init(browser_view->GetProfile()->GetPrefs());
++    window_controls_pref_registrar_->Add(
++        helium::kShowWindowCloseButton,
++        base::BindRepeating(&BrowserFrameViewLinux::OnWindowButtonOrderingChange,
++                            base::Unretained(this)));
++  }
+   if (auto* linux_ui = ui::LinuxUi::instance()) {
+     window_button_order_observation_.Observe(linux_ui);
+-    OnWindowButtonOrderingChange();
+-  }
++  }
++  OnWindowButtonOrderingChange();
+ }
+ 
+ BrowserFrameViewLinux::~BrowserFrameViewLinux() = default;
+@@ -117,8 +150,13 @@
+ 
+ void BrowserFrameViewLinux::OnWindowButtonOrderingChange() {
+   auto* provider = views::WindowButtonOrderProvider::GetInstance();
+-  layout_->SetButtonOrdering(provider->leading_buttons(),
+-                             provider->trailing_buttons());
++  auto leading = provider->leading_buttons();
++  auto trailing = provider->trailing_buttons();
++  if (!ShouldShowWindowCloseButton(GetBrowserView())) {
++    std::erase(leading, views::FrameButton::kClose);
++    std::erase(trailing, views::FrameButton::kClose);
++  }
++  layout_->SetButtonOrdering(leading, trailing);
+ 
+   // We can receive OnWindowButtonOrderingChange events before we've been added
+   // to a Widget. We need a Widget because layout crashes due to dependencies
+@@ -211,12 +249,12 @@
+ 
+ bool BrowserFrameViewLinux::CaptionButtonsOnLeadingEdge() const {
+   auto* const provider = views::WindowButtonOrderProvider::GetInstance();
+-  return !provider->leading_buttons().empty();
++  return HasCaptionButtons(provider->leading_buttons(), GetBrowserView());
+ }
+ 
+ bool BrowserFrameViewLinux::CaptionButtonsOnTrailingEdge() const {
+   auto* const provider = views::WindowButtonOrderProvider::GetInstance();
+-  return !provider->trailing_buttons().empty();
++  return HasCaptionButtons(provider->trailing_buttons(), GetBrowserView());
+ }
+ 
+ BrowserFrameViewLinux::BoundsAndMargins
+--- a/chrome/browser/ui/views/frame/browser_frame_view_linux.h
++++ b/chrome/browser/ui/views/frame/browser_frame_view_linux.h
+@@ -5,11 +5,15 @@
+ #ifndef CHROME_BROWSER_UI_VIEWS_FRAME_BROWSER_FRAME_VIEW_LINUX_H_
+ #define CHROME_BROWSER_UI_VIEWS_FRAME_BROWSER_FRAME_VIEW_LINUX_H_
+ 
++#include <memory>
++
+ #include "base/memory/raw_ptr.h"
+ #include "chrome/browser/ui/views/frame/browser_frame_view_layout_linux.h"
+ #include "chrome/browser/ui/views/frame/opaque_browser_frame_view.h"
+ #include "ui/base/metadata/metadata_header_macros.h"
+ #include "ui/linux/window_button_order_observer.h"
++
++class PrefChangeRegistrar;
+ 
+ namespace ui {
+ class LinuxUi;
+@@ -68,6 +72,7 @@
+ 
+  private:
+   const raw_ptr<BrowserFrameViewLayoutLinux> layout_;
++  std::unique_ptr<PrefChangeRegistrar> window_controls_pref_registrar_;
+ 
+   base::ScopedObservation<ui::LinuxUi, ui::WindowButtonOrderObserver>
+       window_button_order_observation_{this};
+--- a/chrome/browser/ui/webui/side_panel/customize_chrome/customize_toolbar/customize_toolbar.mojom
++++ b/chrome/browser/ui/webui/side_panel/customize_chrome/customize_toolbar/customize_toolbar.mojom
+@@ -43,6 +43,8 @@
+   kSplitTab,
+   kContextualTasks,
+   kShowTabsFromOtherDevices,
++  // Linux client-side window control; not a tab close action.
++  kWindowClose,
+ };
+ 
+ // Unique identifiers for categories the actions can belong to.
+--- a/chrome/browser/ui/webui/side_panel/customize_chrome/customize_toolbar/customize_toolbar_handler.cc
++++ b/chrome/browser/ui/webui/side_panel/customize_chrome/customize_toolbar/customize_toolbar_handler.cc
+@@ -7,6 +7,7 @@
+ #include "base/feature_list.h"
+ #include "base/metrics/user_metrics.h"
+ #include "base/strings/strcat.h"
++#include "build/build_config.h"
+ #include "chrome/app/vector_icons/vector_icons.h"
+ #include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/ui/actions/chrome_action_id.h"
+@@ -19,6 +20,7 @@
+ #include "chrome/browser/ui/webui/util/image_util.h"
+ #include "chrome/browser/ui/webui/webui_embedding_context.h"
+ #include "chrome/common/chrome_features.h"
++#include "chrome/common/helium_window_controls_prefs.h"
+ #include "chrome/common/pref_names.h"
+ #include "chrome/grit/branded_strings.h"
+ #include "chrome/grit/generated_resources.h"
+@@ -181,6 +183,12 @@
+           Profile::FromBrowserContext(web_contents_->GetBrowserContext()))) {
+   model_observation_.Observe(model_);
+   pref_change_registrar_.Init(prefs());
++#if BUILDFLAG(IS_LINUX)
++  pref_change_registrar_.Add(
++      helium::kShowWindowCloseButton,
++      base::BindRepeating(&CustomizeToolbarHandler::OnActionsChanged,
++                          base::Unretained(this)));
++#endif
+ 
+   pref_change_registrar_.Add(
+       prefs::kShowHomeButton,
+@@ -423,6 +431,19 @@
+   actions.push_back(std::move(avatar_action));
+   actions.push_back(std::move(menu_action));
+ 
++#if BUILDFLAG(IS_LINUX)
++  // A window control, not a pinned action. Reuse the existing toggle UI.
++  actions.push_back(side_panel::customize_chrome::mojom::Action::New(
++      side_panel::customize_chrome::mojom::ActionId::kWindowClose,
++      "Show window close button",
++      prefs()->GetBoolean(helium::kShowWindowCloseButton), false,
++      side_panel::customize_chrome::mojom::CategoryId::kYourChrome,
++      GURL(webui::EncodePNGAndMakeDataURI(
++          ui::ImageModel::FromVectorIcon(views::kCloseIcon, icon_color_id)
++              .Rasterize(&provider),
++          scale_factor))));
++#endif
++
+   const auto add_action =
+       [&actions, this, &provider, scale_factor, bwi](
+           actions::ActionId id,
+@@ -539,6 +560,13 @@
+ void CustomizeToolbarHandler::PinAction(
+     side_panel::customize_chrome::mojom::ActionId action_id,
+     bool pin) {
++#if BUILDFLAG(IS_LINUX)
++  if (action_id ==
++      side_panel::customize_chrome::mojom::ActionId::kWindowClose) {
++    prefs()->SetBoolean(helium::kShowWindowCloseButton, pin);
++    return;
++  }
++#endif
+   const std::optional<actions::ActionId> chrome_action =
+       ChromeActionForMojoAction(action_id);
+   if (!chrome_action.has_value()) {
+@@ -596,10 +624,17 @@
+ 
+ void CustomizeToolbarHandler::GetIsCustomized(
+     GetIsCustomizedCallback callback) {
+-  std::move(callback).Run(!model_->IsDefault());
++  bool customized = !model_->IsDefault();
++#if BUILDFLAG(IS_LINUX)
++  customized |= !prefs()->GetBoolean(helium::kShowWindowCloseButton);
++#endif
++  std::move(callback).Run(customized);
+ }
+ 
+ void CustomizeToolbarHandler::ResetToDefault() {
++#if BUILDFLAG(IS_LINUX)
++  prefs()->ClearPref(helium::kShowWindowCloseButton);
++#endif
+   model_->ResetToDefault();
+ }
+ 
+--- a/chrome/browser/ui/webui/side_panel/customize_chrome/customize_toolbar/customize_toolbar_handler_unittest.cc
++++ b/chrome/browser/ui/webui/side_panel/customize_chrome/customize_toolbar/customize_toolbar_handler_unittest.cc
+@@ -8,6 +8,7 @@
+ #include "base/test/bind.h"
+ #include "base/test/gmock_move_support.h"
+ #include "base/test/mock_callback.h"
++#include "build/build_config.h"
+ #include "chrome/browser/search_engines/template_url_service_factory.h"
+ #include "chrome/browser/ui/actions/chrome_action_id.h"
+ #include "chrome/browser/ui/actions/chrome_actions.h"
+@@ -16,10 +17,12 @@
+ #include "chrome/browser/ui/toolbar/pinned_toolbar/pinned_toolbar_actions_model_factory.h"
+ #include "chrome/browser/ui/webui/side_panel/customize_chrome/customize_toolbar/customize_toolbar.mojom.h"
+ #include "chrome/browser/ui/webui/webui_embedding_context.h"
++#include "chrome/common/helium_window_controls_prefs.h"
+ #include "chrome/common/pref_names.h"
+ #include "chrome/test/base/chrome_render_view_host_test_harness.h"
+ #include "chrome/test/base/search_test_utils.h"
+ #include "components/keyed_service/core/keyed_service.h"
++#include "components/prefs/pref_service.h"
+ #include "content/public/browser/web_contents.h"
+ #include "mojo/public/cpp/bindings/pending_receiver.h"
+ #include "testing/gmock/include/gmock/gmock.h"
+@@ -301,6 +304,39 @@
+ }
+ 
+ 
++#if BUILDFLAG(IS_LINUX)
++TEST_F(CustomizeToolbarHandlerTest, WindowCloseButtonDefaultsToVisible) {
++  EXPECT_TRUE(profile()->GetPrefs()->GetBoolean(helium::kShowWindowCloseButton));
++}
++
++TEST_F(CustomizeToolbarHandlerTest, WindowCloseButtonToggleAndNotification) {
++  EXPECT_CALL(mock_pinned_toolbar_actions_model(), UpdatePinnedState).Times(0);
++  EXPECT_CALL(mock_page_, NotifyActionsUpdated).Times(2);
++  handler().PinAction(
++      side_panel::customize_chrome::mojom::ActionId::kWindowClose, false);
++  EXPECT_FALSE(profile()->GetPrefs()->GetBoolean(helium::kShowWindowCloseButton));
++  mock_page_.FlushForTesting();
++  handler().PinAction(
++      side_panel::customize_chrome::mojom::ActionId::kWindowClose, true);
++  EXPECT_TRUE(profile()->GetPrefs()->GetBoolean(helium::kShowWindowCloseButton));
++  mock_page_.FlushForTesting();
++}
++
++TEST_F(CustomizeToolbarHandlerTest, WindowCloseButtonCustomizationAndReset) {
++  handler().PinAction(
++      side_panel::customize_chrome::mojom::ActionId::kWindowClose, false);
++  base::MockCallback<CustomizeToolbarHandler::GetIsCustomizedCallback> callback;
++  EXPECT_CALL(callback, Run(true)).Times(1);
++  handler().GetIsCustomized(callback.Get());
++  EXPECT_CALL(mock_pinned_toolbar_actions_model(), ResetToDefault).Times(1);
++  handler().ResetToDefault();
++  EXPECT_TRUE(profile()->GetPrefs()->GetBoolean(helium::kShowWindowCloseButton));
++  EXPECT_TRUE(profile()->GetPrefs()
++                  ->FindPreference(helium::kShowWindowCloseButton)
++                  ->IsDefaultValue());
++}
++#endif  // BUILDFLAG(IS_LINUX)
++
+ TEST_F(CustomizeToolbarHandlerTest, ResetToDefault) {
+   EXPECT_CALL(mock_pinned_toolbar_actions_model(), ResetToDefault).Times(1);
+   handler().ResetToDefault();
+--- a/chrome/common/BUILD.gn
++++ b/chrome/common/BUILD.gn
+@@ -567,6 +567,7 @@
+     "chrome_paths.h",
+     "chrome_paths_internal.h",
+     "chrome_result_codes.h",
++    "helium_window_controls_prefs.h",
+     "pref_font_script_names-inl.h",
+     "pref_font_webkit_names.h",
+     "pref_names.h",
+--- /dev/null
++++ b/chrome/common/helium_window_controls_prefs.h
+@@ -0,0 +1,16 @@
++// Copyright 2026 The Helide Authors
++// Use of this source code is governed by the GPL-3.0 license in LICENSE.
++
++#ifndef CHROME_COMMON_HELIUM_WINDOW_CONTROLS_PREFS_H_
++#define CHROME_COMMON_HELIUM_WINDOW_CONTROLS_PREFS_H_
++
++namespace helium {
++
++// Per-profile visibility of the client-side window close button. Internal
++// preference identifiers retain the helium prefix for compatibility.
++inline constexpr char kShowWindowCloseButton[] =
++    "helium.browser.show_window_close_button";
++
++}  // namespace helium
++
++#endif  // CHROME_COMMON_HELIUM_WINDOW_CONTROLS_PREFS_H_
