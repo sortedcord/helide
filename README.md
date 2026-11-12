@@ -16,6 +16,66 @@ Helide combines Wayland transparency and compositor blur, touchpad page-slide
 navigation, Linux Energy Saver integration, and background AI-agent access.
 It is a personal project—not an official Helium or Motorola product.
 
+## Features
+
+### Live transparency and blur
+
+<p align="center">
+  <img src="docs/illustrations/appearance.svg" alt="The window tint fades over softly blurred desktop colors while text and controls stay crisp." width="720">
+</p>
+
+Adjust the window tint and compositor blur live, while text and controls stay crisp. [Appearance controls](#settings).
+
+### Transparent websites, by choice
+
+<p align="center">
+  <img src="docs/illustrations/website-transparency.svg" alt="Opting into transparent website backgrounds reveals the desktop while images, text and explicitly painted surfaces remain opaque." width="720">
+</p>
+
+Let the desktop show through transparent page backgrounds without fading images, text or explicitly painted surfaces. [How website transparency works](#transparent-website-backgrounds).
+
+### Touchpad page transitions
+
+<p align="center">
+  <img src="docs/illustrations/swipe.svg" alt="A two-finger swipe slides the current page aside to reveal the previous page; the toolbar stays fixed." width="720">
+</p>
+
+Swipe through history with a fluid page stack: the page moves with your fingers while the toolbar stays put. [Swipe settings and behavior](#slide-pages-when-swiping).
+
+### Linux-aware Energy Saver
+
+<p align="center">
+  <img src="docs/illustrations/energy-saver.svg" alt="Linux battery and power-profile signals enable Energy Saver and reduce background activity." width="720">
+</p>
+
+Follow battery state and your power-saver profile to reduce background activity. [Energy Saver rules](#energy-saver-on-linux).
+
+### Opaque fullscreen
+
+<p align="center">
+  <img src="docs/illustrations/fullscreen.svg" alt="A window expands into an opaque fullscreen surface, then regains transparency on exit." width="720">
+</p>
+
+Fullscreen drops transparency and blur so the compositor can skip background blending. Leaving fullscreen automatically restores your windowed appearance. Direct scanout is possible where the graphics stack supports it.
+
+### Agents without the takeover
+
+<p align="center">
+  <img src="docs/illustrations/agent-tabs.svg" alt="An agent works in its collapsed tab group while your selected tab stays unchanged." width="720">
+</p>
+
+Keep using your selected tab while agents work in background tabs inside a collapsed Agent group. [Agent Access](#let-ai-agents-control-helide).
+
+### Structured browser tools
+
+<p align="center">
+  <img src="docs/illustrations/mcp-tools.svg" alt="Structured inspect, fill and click calls highlight the corresponding browser elements in sequence." width="720">
+</p>
+
+Give agents inspect, read, fill and click tools instead of asking them to write browser-control scripts. [Helide MCP setup and tools](#helide-mcp-server).
+
+## Overview
+
 There are separate controls for browser UI opacity, blur, and website
 transparency. The tab strip, toolbar, and transparent webpage backgrounds can
 show the desktop behind the window. Webpages keep an opaque backing by default;
@@ -192,10 +252,6 @@ kills the build and not your session.
 
 ## Settings
 
-<p align="center">
-  <img src="docs/illustrations/appearance.svg" alt="The window tint fades over softly blurred desktop colors while text and controls stay crisp." width="720">
-</p>
-
 On native Wayland, **Settings → Appearance** shows three controls, below the
 rounded-frame option, and **Settings → Behavior** shows the page-slide swipe
 toggle (see [Slide pages when swiping](#slide-pages-when-swiping)). They are
@@ -223,10 +279,6 @@ can take effect. Flags and switches are read at startup.
 
 
 ## Let AI agents control Helide
-
-<p align="center">
-  <img src="docs/illustrations/agent-tabs.svg" alt="An agent works in its collapsed tab group while your selected tab stays unchanged." width="720">
-</p>
 
 **Settings → Behavior → Let AI agents control Helide** keeps Chromium's remote
 debugging server (the DevTools protocol, CDP) running on `127.0.0.1:9222`, with
@@ -266,10 +318,6 @@ used when this setting is off.
 
 ### Helide MCP server
 
-<p align="center">
-  <img src="docs/illustrations/mcp-tools.svg" alt="Structured inspect, fill and click calls highlight the corresponding browser elements in sequence." width="720">
-</p>
-
 The [`mcp/`](mcp/README.md) directory contains an attach-only TypeScript MCP
 server for this endpoint. It provides 18 core tools for tabs, page reading,
 element-based interaction, screenshots, dialogs, uploads and downloads. Agents
@@ -280,10 +328,6 @@ See [setup, tools and tests](mcp/README.md). History and media controls are plan
 next, not part of the initial toolset. No Chromium rebuild is required.
 
 ## Energy saver on Linux
-
-<p align="center">
-  <img src="docs/illustrations/energy-saver.svg" alt="Linux battery and power-profile signals enable Energy Saver and reduce background activity." width="720">
-</p>
 
 Energy saver is in **Settings → Performance**. It needs no setup: Helide reads the
 battery from sysfs and UPower. Each rule works as follows:
@@ -299,22 +343,7 @@ Energy saver throttles background tabs, limits frame rates and reduces timer
 frequency. With the Energy saver toggle off, the power-saver profile has no
 effect on Helide.
 
-## Opaque fullscreen
-
-<p align="center">
-  <img src="docs/illustrations/fullscreen.svg" alt="A window expands into an opaque fullscreen surface, then regains transparency on exit." width="720">
-</p>
-
-Fullscreen drops the window's transparency and blur and declares its surface
-opaque, allowing the compositor to skip background blending. Where the graphics
-stack permits it, this can also help fullscreen video use direct scanout.
-Leaving fullscreen restores your windowed appearance settings automatically.
-
 ## Slide pages when swiping
-
-<p align="center">
-  <img src="docs/illustrations/swipe.svg" alt="A two-finger swipe slides the current page aside to reveal the previous page; the toolbar stays fixed." width="720">
-</p>
 
 On native Wayland, a two-finger horizontal swipe on the touchpad slides the page
 with your fingers, like Safari on macOS. The pages behave as a stack: going back,
@@ -441,10 +470,6 @@ See [niri's blur configuration](https://github.com/niri-wm/niri/wiki/Configurati
 and the [Wayland background-effect protocol](https://wayland.app/protocols/ext-background-effect-v1).
 
 ## Transparent website backgrounds
-
-<p align="center">
-  <img src="docs/illustrations/website-transparency.svg" alt="Opting into transparent website backgrounds reveals the desktop while images, text and explicitly painted surfaces remain opaque." width="720">
-</p>
 
 Turn on **Settings → Appearance → Transparent website backgrounds**, or enable
 **Transparent web content on Wayland** at
