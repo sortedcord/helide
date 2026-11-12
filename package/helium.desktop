@@ -1,6 +1,6 @@
 [Desktop Entry]
 Version=1.0
-Name=Helium
+Name=Helide
 
 # For future reference, these translations are available in the Chromium
 # tree at chrome/installer/linux/common/desktop.template.
@@ -60,7 +60,7 @@ GenericName[te]=వెబ్ బ్రౌజర్
 GenericName[vi]=Bộ duyệt Web
 
 # Gnome and KDE 3 uses Comment.
-Comment=Access the Internet
+Comment=Personal Helium fork for Linux on Motobook 60 Pro
 Comment[ar]=الدخول إلى الإنترنت
 Comment[bg]=Достъп до интернет
 Comment[bn]=ইন্টারনেটটি অ্যাক্সেস করুন

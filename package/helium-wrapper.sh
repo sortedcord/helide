@@ -5,7 +5,7 @@
 
 # Replace when packaging, so that we can easily determine which
 # distro the user is using if they open a bug report.
-export CHROME_VERSION_EXTRA="custom"
+export CHROME_VERSION_EXTRA="Helide: personal Linux build for Motobook 60 Pro"
 
 # Let the wrapped binary know that it has been run through the wrapper.
 CHROME_WRAPPER="$(readlink -f "$0")"

@@ -1,12 +1,18 @@
-# Helium packaging guidelines
+# Helide packaging guidelines
 
-This document provides guidelines for packagers creating Helium packages
-for various Linux distriutions and packaging systems. These guidelines
+Helide is a personal Helium fork for Linux on the Motobook 60 Pro. These
+packaging notes are adapted from upstream Helium. Visible desktop/AppStream
+names and the icon identify Helide, but executable, package, profile and desktop
+IDs retain their existing `helium` names for compatibility. This is not an
+official Helium release.
+
+This document provides guidelines for packagers creating Helide packages
+for various Linux distributions and packaging systems. These guidelines
 aim to ensure consistency across different package formats while
 respecting distribution-specific conventions.
 
 ## Installation
-- The installation prefix of Helium packages is not mandated by
+- The installation prefix of Helide packages is not mandated by
   upstream. Note that on FHS-compliant distributions, Chromium-based
   browsers are typically installed into /opt or /usr/lib64.
 - The primary executable should be a symbolic link to
@@ -45,7 +51,7 @@ respecting distribution-specific conventions.
 
 ## Security
 - Packages MUST NOT add default arguments that weaken the security of
-  Helium, including but not limited to `--no-sandbox`.
+  Helide, including but not limited to `--no-sandbox`.
 - Packages MUST NOT be built with disabled build-time security features
   (e.g. `is_cfi=false`).
 

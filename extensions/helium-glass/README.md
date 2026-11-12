@@ -1,6 +1,6 @@
 # Helium Glass
 
-A companion extension for [Helium: With Transparency](https://github.com/sortedcord/helium-translucent-wayland). It
+A companion extension for [Helide](https://github.com/sortedcord/helium-translucent-wayland). It
 automatically samples each page's palette and replaces suitable background
 fills with translucent versions of their original colors. Light pages keep
 light tints; dark pages keep dark tints. Large page backgrounds become clearer
@@ -28,7 +28,7 @@ rebuild, package manager, bundler, account, or network service is needed.
 In regular Chrome/Helium, it can change CSS fills but cannot make the browser's
 opaque page backing show the desktop.
 
-Optional compositor blur is controlled by Helium's separate **Blur behind the
+Optional compositor blur is controlled by Helide's separate **Blur behind the
 window** setting (or `--helium-frame-blur=1`). This extension does not set the compositor's
 blur radius or change your browser launch settings.
 

@@ -1,0 +1,38 @@
+--- a/chrome/app/chrome_main_delegate.cc
++++ b/chrome/app/chrome_main_delegate.cc
+@@ -475,7 +475,7 @@
+ 
+   if (command_line.HasSwitch(switches::kVersion)) {
+     UNSAFE_TODO(printf(
+-        "%s %s (Chromium %s)\n", version_info::GetProductName().data(),
++        "Helide %s (Helium fork; Chromium %s; personal Linux build for Motobook 60 Pro)\n",
+         version_info::GetHeliumVersionNumber().data(),
+         version_info::GetVersionNumber().data()));
+     return true;
+--- a/chrome/browser/ui/webui/version/version_ui.cc
++++ b/chrome/browser/ui/webui/version/version_ui.cc
+@@ -239,10 +239,9 @@
+ 
+ // static
+ void VersionUI::AddVersionDetailStrings(content::WebUIDataSource* html_source) {
+-  html_source->AddLocalizedString(version_ui::kOfficial,
+-                                  version_info::IsOfficialBuild()
+-                                      ? IDS_VERSION_UI_OFFICIAL
+-                                      : IDS_VERSION_UI_UNOFFICIAL);
++  // Personal fork identity, not an official upstream Helium release.
++  html_source->AddString(version_ui::kOfficial,
++                        "Personal Linux build for Motobook 60 Pro; Helium fork");
+   html_source->AddLocalizedString(version_ui::kVersionProcessorVariation,
+                                   VersionProcessorVariation());
+ 
+@@ -345,9 +344,7 @@
+       {base::UTF8ToUTF16(version_info::GetHeliumVersionNumber()),
+       base::UTF8ToUTF16(version_info::GetVersionNumber()),
+       base::UTF8ToUTF16(GetVersionInformationalSuffix()),
+-      l10n_util::GetStringUTF16(version_info::IsOfficialBuild()
+-                                    ? IDS_VERSION_UI_OFFICIAL
+-                                    : IDS_VERSION_UI_UNOFFICIAL),
++      u"Personal Linux build for Motobook 60 Pro; Helium fork",
+       base::UTF8ToUTF16(GetProductModifier()),
+       l10n_util::GetStringUTF16(VersionUI::VersionProcessorVariation()),
+       u"Chromium"}, nullptr);

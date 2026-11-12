@@ -106,6 +106,11 @@ helium_resources() {
     python3 "$_main_repo/utils/replace_resources.py" "$_main_repo/resources/helium_resources.txt" "$_main_repo/resources" "$_src_dir"
 }
 
+helium_branding() {
+    # Last overlay: upstream substitutions/resources must not undo fork branding.
+    python3 "$_root_dir/scripts/apply-helide-branding.py" --tree "$_src_dir"
+}
+
 write_gn_args() {
     mkdir -p "${_out_dir}"
 

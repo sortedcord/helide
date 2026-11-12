@@ -16,3 +16,4 @@ helium/linux/linux-battery-energy-saver.patch
 helium/linux/wayland-fullscreen-opaque.patch
 helium/linux/helium-agent-access.patch
 helium/linux/helium-target-march.patch
+helium/linux/helide-branding.patch

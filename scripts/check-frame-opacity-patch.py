@@ -47,6 +47,7 @@ def main():
             "helium/linux/wayland-fullscreen-opaque.patch",
             "helium/linux/helium-agent-access.patch",
             "helium/linux/helium-target-march.patch",
+            "helium/linux/helide-branding.patch",
         ],
     )
     selected = parser.parse_args().patch

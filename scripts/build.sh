@@ -25,6 +25,7 @@ helium_substitution
 helium_apply_translations
 helium_version
 helium_resources
+helium_branding
 write_gn_args
 gn_gen
 build

@@ -2,18 +2,18 @@
 %global debug_package %{nil}
 
 Name:    helium-bin
-Summary: Private, fast, and honest web browser
+Summary: Helide - personal Helium fork for Linux on Motobook 60 Pro
 Version: %{version}
 Release: 1%{?dist}
 Group:   web
 License: GPL-3.0
-URL:     https://github.com/imputnet/helium-linux
-Source0: https://github.com/imputnet/helium-linux/releases/download/%{version}/helium-%{version}-x86_64_linux.tar.xz
-Source1: https://github.com/imputnet/helium-linux/releases/download/%{version}/helium-%{version}-arm64_linux.tar.xz
+URL:     https://github.com/sortedcord/helium-translucent-wayland
+Source0: https://github.com/sortedcord/helium-translucent-wayland/releases/download/%{version}/helium-%{version}-x86_64_linux.tar.xz
+Source1: https://github.com/sortedcord/helium-translucent-wayland/releases/download/%{version}/helium-%{version}-arm64_linux.tar.xz
 Source2: net.imput.helium.metainfo.xml
 
 %if 0%{?debbuild}
-Packager: imput <helium@imput.net>
+Packager: sortedcord
 Provides: www-browser
 %endif
 
@@ -29,7 +29,9 @@ Recommends: liberation-fonts, vulkan-loader
 %endif
 
 %description
-Private, fast, and honest web browser based on Chromium
+Helide is a personal Helium fork tailored for Linux on Motobook 60 Pro,
+with Wayland transparency, touchpad page transitions, Linux Energy Saver
+and background AI-agent access. Not an official Helium or Motorola product.
 
 %prep
 %ifarch x86_64 amd64

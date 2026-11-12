@@ -18,7 +18,7 @@ RUN apt-get -y install bison ca-certificates curl debhelper desktop-file-utils f
   mesa-common-dev pkg-config python3-jinja2 python3-setuptools python3-xcbgen python-is-python3 qtbase5-dev \
   uuid-dev valgrind wdiff x11-apps xcb-proto xfonts-base xvfb xz-utils yasm zstd
 
-RUN apt-get -y install git python3-pillow python3-requests rsync sudo vim
+RUN apt-get -y install git python3-pillow python3-requests rsync sudo vim librsvg2-bin fonts-dejavu-core
 
 # install sccache
 ARG SCCACHE_VERSION=0.10.0

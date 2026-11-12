@@ -1,0 +1,82 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1254" height="1254" viewBox="0 0 1254 1254" role="img" aria-labelledby="title desc">
+  <title id="title">Helide browser icon</title>
+  <desc id="desc">A white six-ray helium-inspired symbol with an unexpected flowing split, on a periwinkle rounded-square background based on #8698df. The flowing branch symbolizes making something thought impossible.</desc>
+  <defs>
+    <!-- The central shade is the requested Helide brand color. -->
+    <linearGradient id="tileColor" x1="0" y1="1" x2="0.78" y2="0" objectBoundingBox="true">
+      <stop offset="0" stop-color="#6173d3"/>
+      <stop offset="0.46" stop-color="#8698df"/>
+      <stop offset="1" stop-color="#a5b4f4"/>
+    </linearGradient>
+    <radialGradient id="upperGlow" cx="80%" cy="9%" r="85%">
+      <stop offset="0" stop-color="#b4c3ff" stop-opacity="0.33"/>
+      <stop offset="1" stop-color="#b4c3ff" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="lowerShade" cx="16%" cy="95%" r="85%">
+      <stop offset="0" stop-color="#4c5cce" stop-opacity="0.45"/>
+      <stop offset="1" stop-color="#4c5cce" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="starWhite" x1="0.4" y1="0" x2="0.6" y2="1" objectBoundingBox="true">
+      <stop offset="0" stop-color="#fff"/>
+      <stop offset="0.6" stop-color="#fcfbff"/>
+      <stop offset="1" stop-color="#f6f5fc"/>
+    </linearGradient>
+    <linearGradient id="unbrokenToImpossible" x1="0" y1="0" x2="1" y2="0" objectBoundingBox="true">
+      <stop offset="0" stop-color="#fff" stop-opacity="0.09"/>
+      <stop offset="0.32" stop-color="#fff" stop-opacity="0.46"/>
+      <stop offset="0.68" stop-color="#fff" stop-opacity="0.87"/>
+      <stop offset="1" stop-color="#fff"/>
+    </linearGradient>
+    <clipPath id="tileClip">
+      <rect x="3" y="3" width="1248" height="1248" rx="246"/>
+    </clipPath>
+  </defs>
+
+  <!-- Icon silhouette: transparent outside the macOS-style rounded tile. -->
+  <g clip-path="url(#tileClip)">
+    <rect x="3" y="3" width="1248" height="1248" fill="url(#tileColor)"/>
+    <rect x="3" y="3" width="1248" height="1248" fill="url(#upperGlow)"/>
+    <rect x="3" y="3" width="1248" height="1248" fill="url(#lowerShade)"/>
+
+    <!-- A second, impossible-looking branch lifts away from the main spoke. -->
+    <path fill="url(#unbrokenToImpossible)" d="
+      M 820,716
+      C 857,691 891,666 933,665
+      C 967,663 999,665 1035,665
+      L 1009,740
+      H 961
+      C 931,740 908,754 882,776
+      C 861,755 839,731 820,716
+      Z"/>
+
+    <!-- Six-rayed core and its gently curving lower-right strand. -->
+    <path fill="url(#starWhite)" d="
+      M 540,202
+      H 713
+      L 675,535
+      L 945,336
+      L 1034,486
+      L 718,629
+      C 758,644 793,681 834,723
+      C 864,757 882,775 903,789
+      C 928,802 950,800 994,799
+      L 966,877
+      C 921,881 899,877 865,859
+      C 814,830 728,745 676,712
+      L 711,1048
+      H 540
+      L 572,713
+      L 304,911
+      L 216,759
+      L 520,621
+      L 213,490
+      L 303,336
+      L 575,536
+      Z"/>
+
+  </g>
+
+  <!-- Thin highlight along the top edge keeps the app icon legible on dark docks. -->
+  <rect x="4.5" y="4.5" width="1245" height="1245" rx="244.5"
+        fill="none" stroke="#d9e0ff" stroke-opacity=".33" stroke-width="5"/>
+</svg>

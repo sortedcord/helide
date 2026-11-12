@@ -1,53 +1,38 @@
 <?xml version="1.0" encoding="UTF-8" ?>
 <component type="desktop-application">
+  <!-- Existing application identity is retained for profile/desktop compatibility. -->
   <id>net.imput.helium</id>
   <launchable type="desktop-id">helium.desktop</launchable>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-only</project_license>
-  <name>Helium</name>
-  <summary>Private, fast, and honest web browser</summary>
+  <name>Helide</name>
+  <summary>Personal Helium fork for Linux on Motobook 60 Pro</summary>
   <description>
     <p>
-      Helium is a private, fast, and honest web browser based on Chromium.
-      It prioritizes user privacy while maintaining excellent performance and
-      a clean browsing experience.
+      Helide is a personal fork of Helium, tailored for Linux on the Motobook
+      60 Pro. It is based on Helium and Chromium and is not an official Helium
+      or Motorola product. Upstream copyright and license notices are preserved.
     </p>
-    <p>Features:</p>
     <ul>
-      <li>Private browsing by default</li>
-      <li>Fast performance based on Chromium</li>
-      <li>Honest and transparent development</li>
-      <li>Cross-platform support</li>
-      <li>Open-source software</li>
+      <li>Configurable Wayland transparency and compositor blur</li>
+      <li>Touchpad page-slide history navigation</li>
+      <li>Linux battery-aware Energy Saver integration</li>
+      <li>Background AI-agent access through the DevTools protocol</li>
     </ul>
   </description>
-  <url type="homepage">https://github.com/imputnet/helium-linux</url>
-  <url type="bugtracker">https://github.com/imputnet/helium-linux/issues</url>
-  <url type="help">https://github.com/imputnet/helium-linux</url>
-  <screenshots>
-    <screenshot type="default">
-      <caption>Kagi search results showing web pages and videos</caption>
-      <image
-            >https://raw.githubusercontent.com/imputnet/helium-linux/refs/heads/main/package/screenshots/lead.png</image>
-    </screenshot>
-    <screenshot>
-      <caption>Viewing Wikipedia articles with image galleries</caption>
-      <image
-            >https://raw.githubusercontent.com/imputnet/helium-linux/refs/heads/main/package/screenshots/split-view.png</image>
-    </screenshot>
-  </screenshots>
+  <url type="homepage">https://github.com/sortedcord/helium-translucent-wayland</url>
+  <url type="bugtracker">https://github.com/sortedcord/helium-translucent-wayland/issues</url>
+  <url type="help">https://github.com/sortedcord/helium-translucent-wayland#readme</url>
   <content_rating type="oars-1.1" />
-  <releases>
-    <release version="0.20.3.1" date="2026-10-30" />
-  </releases>
-  <developer id="net.imput">
-    <name>imput</name>
+  <developer id="io.github.sortedcord">
+    <name>sortedcord (personal fork)</name>
   </developer>
   <keywords>
     <keyword>browser</keyword>
     <keyword>web</keyword>
-    <keyword>internet</keyword>
-    <keyword>privacy</keyword>
+    <keyword>wayland</keyword>
+    <keyword>helium</keyword>
+    <keyword>helide</keyword>
   </keywords>
   <categories>
     <category>Network</category>

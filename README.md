@@ -1,7 +1,22 @@
-# Helium: With Transparency
+<p align="center">
+  <img src="helide-icon.svg" alt="Helide logo" width="160" height="160">
+</p>
 
-This fork adds configurable transparency and compositor blur to Helium for Linux
-on Wayland, with separate controls for browser UI opacity, blur, and website
+<h1 align="center">Helide</h1>
+
+<p align="center">
+  <strong>A personal Helium fork, tailored for Linux on the Motobook 60 Pro.</strong>
+</p>
+
+<p align="center">
+  Wayland transparency · Touchpad page transitions · Linux Energy Saver · Background AI agents
+</p>
+
+Helide combines Wayland transparency and compositor blur, touchpad page-slide
+navigation, Linux Energy Saver integration, and background AI-agent access.
+It is a personal project—not an official Helium or Motorola product.
+
+There are separate controls for browser UI opacity, blur, and website
 transparency. The tab strip, toolbar, and transparent webpage backgrounds can
 show the desktop behind the window. Webpages keep an opaque backing by default;
 website transparency is opt-in and respects the site's CSS. Text, images, and
@@ -9,11 +24,11 @@ browser controls keep their normal opacity. These features are off by default.
 
 ## Demo
 
-[![Helium transparency demonstration](docs/media/transparency-demo.gif)](docs/media/transparency-demo.mp4)
+[![Helide transparency demonstration](docs/media/transparency-demo.gif)](docs/media/transparency-demo.mp4)
 
 Animated preview — click it to [watch the full-resolution recording](docs/media/transparency-demo.mp4).
 
-The patch targets Helium Linux `0.20.3.1`, shared Helium commit
+Helide is based on Helium Linux `0.20.3.1`, shared Helium commit
 `2f81b9cafa38a95071e20de3f9cd6b0aca6d3c65`, and Chromium `156.0.8078.79`.
 It requires a native Wayland session and client side browser decorations. The
 compositor blends transparent pixels with the desktop. An optional blur request
@@ -72,13 +87,54 @@ The Linux patch is [`patches/helium/linux/wayland-frame-opacity.patch`](patches/
   over, in
   [`helium-agent-access.patch`](patches/helium/linux/helium-agent-access.patch),
   with a toggle in **Settings → Behavior**. See [Let AI agents control
-  Helium](#let-ai-agents-control-helium).
+  Helide](#let-ai-agents-control-helide).
 - Adds a build option to generate code for one CPU, in
   [`helium-target-march.patch`](patches/helium/linux/helium-target-march.patch).
   `flags.linux.gn` sets it to `arrowlake`. See [CPU target and
   PGO](#cpu-target-and-pgo).
 
 The shared Helium [native materials patch](helium-chromium/patches/helium/ui/native-frame-materials.patch) contains the existing UI painting hooks. The Linux patches extend those hooks with Wayland compositing and website transparency.
+
+## Branding and compatibility
+
+The visible browser name is **Helide**, with the icon in `helide-icon.svg` and
+build/About text identifying this as a personal Linux build for the Motobook
+60 Pro. Upstream Helium and Chromium versions and copyright attribution remain
+visible. The version number currently follows the pinned Helium base.
+
+This is the lightweight rebrand: internal generated product metadata remains
+Helium to avoid a large rebuild. Profile/install paths, the `helium` executable,
+`helium://` URLs, `--helium-*` switches, preference keys, desktop app ID and the
+Pi MCP registration `helium` stay unchanged for compatibility. Do not rename
+these paths to follow the visible brand. Existing profiles need no migration.
+The companion extension keeps its established name, **Helium Glass**.
+
+The [`helide-branding.patch`](patches/helium/linux/helide-branding.patch) handles
+CLI/About build text. [`scripts/apply-helide-branding.py`](scripts/apply-helide-branding.py)
+applies visible string/translation and icon overlays after upstream resources,
+using GRIT fingerprints to preserve translation matching. It preserves legal
+attribution and leaves lowercase internal identifiers alone. PNG/SVG assets use
+the full icon; monochrome vector assets use the icon's core paths.
+
+The overlay requires `rsvg-convert` (included by the build Dockerfile), and saves
+changed string-file backups in `build/helide-branding/backups/`. Applying it twice
+without other source changes should not modify files again. Old Docker builder
+images need rebuilding to obtain the new SVG-rendering dependency. For manual
+development, run the overlay only after patches, name substitution, translations
+and upstream resources have been applied:
+
+```sh
+python3 scripts/apply-helide-branding.py
+python3 scripts/test-helide-branding.py
+```
+
+After compiling, an isolated headless smoke test checks the CLI, version page,
+Settings branding and preserved upstream copyright:
+
+```sh
+cd mcp
+HELIDE_TEST_EXECUTABLE="$(realpath ../build/src/out/Default/helium)" npm test
+```
 
 ## Build
 
@@ -120,6 +176,7 @@ python3 scripts/check-frame-opacity-patch.py --patch helium/linux/linux-battery-
 python3 scripts/check-frame-opacity-patch.py --patch helium/linux/wayland-fullscreen-opaque.patch
 python3 scripts/check-frame-opacity-patch.py --patch helium/linux/helium-agent-access.patch
 python3 scripts/check-frame-opacity-patch.py --patch helium/linux/helium-target-march.patch
+python3 scripts/check-frame-opacity-patch.py --patch helium/linux/helide-branding.patch
 ```
 
 To turn edits made in `build/src` into a patch against the pinned upstream
@@ -167,9 +224,9 @@ previously enabled in `helium://flags`, reset it to Default so the Settings slid
 can take effect. Flags and switches are read at startup.
 
 
-## Let AI agents control Helium
+## Let AI agents control Helide
 
-**Settings → Behavior → Let AI agents control Helium** keeps Chromium's remote
+**Settings → Behavior → Let AI agents control Helide** keeps Chromium's remote
 debugging server (the DevTools protocol, CDP) running on `127.0.0.1:9222`, with
 no per-connection approval prompt. Agents and tools that speak CDP, such as
 chrome-devtools-mcp, Playwright, Puppeteer and plain scripts, connect to your
@@ -205,9 +262,20 @@ unless you use agents. `--remote-debugging-port` and `--remote-debugging-pipe`
 work as before, and Chromium's own approval mode under `chrome://inspect` is
 used when this setting is off.
 
+### Helide MCP server
+
+The [`mcp/`](mcp/README.md) directory contains an attach-only TypeScript MCP
+server for this endpoint. It provides 18 core tools for tabs, page reading,
+element-based interaction, screenshots, dialogs, uploads and downloads. Agents
+can browse without writing JavaScript. Existing tabs are readable but guarded
+against modification; tabs created by the server are session-owned.
+
+See [setup, tools and tests](mcp/README.md). History and media controls are planned
+next, not part of the initial toolset. No Chromium rebuild is required.
+
 ## Energy saver on Linux
 
-Energy saver is in **Settings → Performance**. It needs no setup: Helium reads the
+Energy saver is in **Settings → Performance**. It needs no setup: Helide reads the
 battery from sysfs and UPower. Each rule works as follows:
 
 - **Turn on when your computer is unplugged** or **Turn on at 20% battery**: as
@@ -219,7 +287,7 @@ battery from sysfs and UPower. Each rule works as follows:
 
 Energy saver throttles background tabs, limits frame rates and reduces timer
 frequency. With the Energy saver toggle off, the power-saver profile has no
-effect on Helium.
+effect on Helide.
 
 ## Slide pages when swiping
 
@@ -272,7 +340,7 @@ helium --ozone-platform=wayland --helium-frame-opacity=0.8
 The value is a number from `0` to `1`; for example, `0.8` means 80% opacity.
 Malformed, nonfinite, or out-of-range switch values fall back to fully opaque.
 With no switch, the Settings value is used. The switch is read at startup, so
-close the existing Helium process before relaunching. For the development build,
+close the existing Helide process before relaunching. For the development build,
 the executable is `build/src/out/Default/helium`.
 
 Only the browser UI background uses this opacity. Web content remains opaque unless
@@ -291,7 +359,7 @@ so the effect can be seen. For example:
 helium --ozone-platform=wayland --helium-frame-opacity=0.8 --helium-frame-blur=1
 ```
 
-Use `--helium-frame-blur=0` to remove Helium's request. A compositor window rule
+Use `--helium-frame-blur=0` to remove Helide's request. A compositor window rule
 that forces blur can override that choice. Fullscreen, app, popup, devtools, and
 picture-in-picture windows do not request this effect. Unsupported compositors
 keep transparency without blur.
@@ -302,7 +370,7 @@ include them.
 ### Blur strength on niri
 
 Wayland's background-effect protocol exposes a blur region, but no radius,
-strength, or algorithm. Helium therefore cannot set a portable blur-strength
+strength, or algorithm. Helide therefore cannot set a portable blur-strength
 value. Set strength in your compositor. For example, niri 26.04+ accepts this
 top-level block in `~/.config/niri/config.kdl`:
 
@@ -314,16 +382,16 @@ blur {
 ```
 
 Merge these settings into an existing `blur` block if you have one. They affect
-**all background blur in niri**, not just Helium. Increasing `offset` makes the
+**all background blur in niri**, not just Helide. Increasing `offset` makes the
 blur broader without adding passes; increasing `passes` can smooth a broader
 blur but costs more GPU work. Large offsets can produce artifacts. Niri's
-global `blur { off }` disables blur even if Helium requests it.
+global `blur { off }` disables blur even if Helide requests it.
 
 #### Tips for niri users
 
 - **Blur windows instead of wallpaper:** By default, niri enables `xray` on
   any background effect, which blurs the desktop wallpaper rather than the
-  windows stacked underneath Helium. To blur windows behind Helium, add a
+  windows stacked underneath Helide. To blur windows behind Helide, add a
   window rule with `xray false` to `~/.config/niri/config.kdl`:
   ```kdl
   window-rule {

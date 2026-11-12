@@ -3,7 +3,7 @@
 # You can use, redistribute, and/or modify this source code under
 # the terms of the GPL-3.0 license that can be found in the LICENSE file.
 
-# This is the script that runs when the Helium AppImage is launched.
+# This is the script that runs when the Helide AppImage is launched.
 # It will most likely not do anything useful outside of this.
 THIS="$(readlink -f "${0}")"
 HERE="$(dirname "${THIS}")"
@@ -70,8 +70,8 @@ print_apparmor_profile() {
 }
 
 if needs_apparmor_bootstrap && has_apparmor_prereqs; then
-    echo "Helium has detected that your system uses AppArmor." >&2
-    echo "Before Helium can run, it needs to create an AppArmor profile for itself." >&2
+    echo "Helide has detected that your system uses AppArmor." >&2
+    echo "Before Helide can run, it needs to create an AppArmor profile for itself." >&2
     echo "It will request to run commands as root. If you do not wish to do this, please exit." >&2
 
     print_apparmor_profile | sudo_shim tee "$AA_PROFILE_PATH" && \
