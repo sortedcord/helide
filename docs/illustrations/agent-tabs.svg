@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="260" viewBox="0 0 720 260" role="img" aria-labelledby="title desc">
+  <title id="title">Agents work without taking over your browser</title>
+  <desc id="desc">Your selected tab stays highlighted while activity indicators animate in a collapsed purple Agent group. An agent connects over loopback CDP without activating its tabs.</desc>
+  <defs><style>
+    text{font-family:system-ui,sans-serif;fill:#D5D6DB}.small{font-size:11px;fill:#787C99}
+    .signal{animation:signal 5s linear infinite}.dot{animation:work 2s ease-in-out infinite}.two{animation-delay:.3s}.three{animation-delay:.6s}
+    @keyframes signal{0%,10%{transform:translateX(0);opacity:0}20%{opacity:1}65%{transform:translateX(97px);opacity:1}75%,100%{transform:translateX(97px);opacity:0}}
+    @keyframes work{0%,100%{opacity:.25}50%{opacity:1}}
+    @media(prefers-reduced-motion:reduce){.motion{animation:none!important}.signal{opacity:0}}
+  </style></defs>
+  <rect width="720" height="260" rx="16" fill="#0e1017"/>
+  <text x="28" y="28" class="small" letter-spacing="2">BACKGROUND AGENT ACCESS</text>
+  <rect x="60" y="84" width="98" height="70" rx="12" fill="#24283B" stroke="#BB9AF7"/>
+  <text x="109" y="110" text-anchor="middle" font-size="11" style="fill:#BB9AF7">AGENT</text>
+  <path d="M86 126l-5 5 5 5 M131 126l5 5-5 5 M114 123l-7 16" stroke="#D5D6DB" stroke-width="2" fill="none" stroke-linecap="round"/>
+  <path d="M169 120H278" stroke="#444B6A" stroke-width="2" stroke-dasharray="4 7"/>
+  <g transform="translate(174 120)"><circle r="4" fill="#BB9AF7" class="signal motion"/></g>
+  <text x="221" y="151" text-anchor="middle" class="small">LOOPBACK CDP</text>
+  <rect x="285" y="50" width="375" height="150" rx="12" fill="#24283B" stroke="#444B6A"/>
+  <rect x="299" y="61" width="140" height="28" rx="6" fill="#0e1017"/>
+  <path d="M309 89H429" stroke="#8698df" stroke-width="2"/>
+  <text x="314" y="79" font-size="12">Your tab</text>
+  <rect x="506" y="64" width="132" height="23" rx="6" fill="#BB9AF7" fill-opacity=".15" stroke="#BB9AF7" stroke-opacity=".5"/>
+  <text x="518" y="80" font-size="11" style="fill:#BB9AF7">› Agent</text>
+  <g fill="#BB9AF7"><circle cx="602" cy="76" r="2.5" class="dot motion"/><circle cx="612" cy="76" r="2.5" class="dot two motion"/><circle cx="622" cy="76" r="2.5" class="dot three motion"/></g>
+  <path d="M285 94H660" stroke="#444B6A"/>
+  <text x="309" y="127" font-size="17">Keep doing your thing.</text>
+  <path d="M310 145H532 M310 160H490" stroke="#444B6A" stroke-width="4" stroke-linecap="round"/>
+  <rect x="309" y="176" width="114" height="5" rx="2" fill="#8698df"/>
+  <text x="360" y="235" text-anchor="middle" class="small">YOUR TAB STAYS SELECTED · AGENT TABS STAY GROUPED</text>
+</svg>

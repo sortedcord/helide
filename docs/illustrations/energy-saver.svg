@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="260" viewBox="0 0 720 260" role="img" aria-labelledby="title desc">
+  <title id="title">Linux-aware Energy Saver</title>
+  <desc id="desc">A battery signal reaches the browser and enables Energy Saver. Background activity bars become smaller, illustrating reduced work rather than measured battery savings.</desc>
+  <defs><style>
+    text{font-family:system-ui,sans-serif;fill:#D5D6DB}.small{font-size:11px;fill:#787C99}
+    .signal{animation:signal 6s linear infinite}.saving{animation:saving 6s ease-in-out infinite}.work{transform-box:fill-box;transform-origin:bottom;animation:work 6s ease-in-out infinite}
+    @keyframes signal{0%,10%{transform:translateX(0);opacity:0}20%{opacity:1}48%{transform:translateX(143px);opacity:1}55%,100%{transform:translateX(143px);opacity:0}}
+    @keyframes saving{0%,25%,100%{opacity:.25}45%,85%{opacity:1}}
+    @keyframes work{0%,25%,100%{transform:scaleY(1)}45%,85%{transform:scaleY(.38)}}
+    @media(prefers-reduced-motion:reduce){.motion{animation:none!important}.signal{opacity:0}.work{transform:scaleY(.5)}}
+  </style></defs>
+  <rect width="720" height="260" rx="16" fill="#0e1017"/>
+  <text x="28" y="28" class="small" letter-spacing="2">LINUX POWER INTEGRATION</text>
+  <rect x="68" y="83" width="108" height="65" rx="9" fill="#24283B" stroke="#E0AF68" stroke-width="2"/>
+  <rect x="177" y="104" width="7" height="23" rx="2" fill="#E0AF68"/>
+  <rect x="78" y="94" width="25" height="43" rx="3" fill="#E0AF68"/>
+  <text x="67" y="177" font-size="12">Battery / power profile</text>
+  <path d="M194 116H349" stroke="#444B6A" stroke-width="2" stroke-dasharray="4 7"/>
+  <g transform="translate(198 116)"><circle r="4" fill="#E0AF68" class="signal motion"/></g>
+  <rect x="354" y="52" width="298" height="154" rx="12" fill="#24283B" stroke="#444B6A"/>
+  <path d="M354 85H652" stroke="#444B6A"/>
+  <text x="372" y="74" font-size="12">Helide</text>
+  <g class="saving motion"><circle cx="623" cy="69" r="5" fill="#41A6B5"/><text x="373" y="112" font-size="13" style="fill:#41A6B5">Energy Saver</text></g>
+  <g fill="#8698df"><rect x="376" y="139" width="18" height="42" rx="3" class="work motion"/><rect x="404" y="126" width="18" height="55" rx="3" class="work motion"/><rect x="432" y="145" width="18" height="36" rx="3" class="work motion"/><rect x="460" y="133" width="18" height="48" rx="3" class="work motion"/></g>
+  <path d="M373 183H488" stroke="#444B6A"/>
+  <text x="514" y="157" class="small">LESS BACKGROUND</text><text x="514" y="173" class="small">ACTIVITY</text>
+  <text x="360" y="238" text-anchor="middle" class="small">SYSFS + UPOWER · FOLLOWS YOUR ENERGY SAVER RULES</text>
+</svg>

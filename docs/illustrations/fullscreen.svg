@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="260" viewBox="0 0 720 260" role="img" aria-labelledby="title desc">
+  <title id="title">Opaque fullscreen, translucent again on exit</title>
+  <desc id="desc">A translucent window expands to fill a display and becomes opaque. On exit it shrinks and regains transparency, avoiding unnecessary blending in fullscreen.</desc>
+  <defs>
+    <clipPath id="screen"><rect x="150" y="37" width="420" height="160" rx="10"/></clipPath>
+    <style>
+      text{font-family:system-ui,sans-serif;fill:#D5D6DB}.small{font-size:11px;fill:#787C99}
+      .window{transform-origin:360px 117px;animation:expand 7s ease-in-out infinite}.surface{animation:opaque 7s ease-in-out infinite}.windowed-label{animation:windowed-state 7s ease-in-out infinite}.full{opacity:0;animation:full 7s ease-in-out infinite}
+      @keyframes expand{0%,18%,100%{transform:scale(.72)}42%,72%{transform:scale(1)}}
+      @keyframes opaque{0%,18%,100%{opacity:.55}42%,72%{opacity:1}}
+      @keyframes windowed-state{0%,18%,100%{opacity:1}38%,78%{opacity:0}}
+      @keyframes full{0%,25%,90%,100%{opacity:0}45%,72%{opacity:1}}
+      @media(prefers-reduced-motion:reduce){.motion{animation:none!important}.window{transform:scale(1)}.surface{opacity:1}.windowed-label{opacity:0}.full{opacity:1}}
+    </style>
+  </defs>
+  <rect width="720" height="260" rx="16" fill="#0e1017"/>
+  <text x="28" y="28" class="small" letter-spacing="2">SMART FULLSCREEN</text>
+  <g clip-path="url(#screen)">
+    <rect x="150" y="37" width="420" height="160" fill="#24283B"/>
+    <path d="M120 173Q270 25 430 128T600 71" stroke="#BB9AF7" stroke-width="37" fill="none" opacity=".4"/>
+    <path d="M133 198Q310 84 500 185T610 108" stroke="#41A6B5" stroke-width="32" fill="none" opacity=".4"/>
+    <g class="window motion">
+      <rect x="150" y="37" width="420" height="160" rx="8" fill="#0e1017" opacity=".7" class="surface motion"/>
+      <rect x="150" y="37" width="420" height="160" rx="8" fill="none" stroke="#8698df"/>
+      <path d="M340 94L340 140 379 117Z" fill="#8698df"/>
+      <path d="M177 177H543" stroke="#444B6A" stroke-width="3" stroke-linecap="round"/>
+      <path d="M177 177H286" stroke="#41A6B5" stroke-width="3" stroke-linecap="round"/>
+      <path d="M530 52H540V62 M190 52H180V62 M530 182H540V172 M190 182H180V172" fill="none" stroke="#D5D6DB" stroke-width="2"/>
+    </g>
+  </g>
+  <rect x="150" y="37" width="420" height="160" rx="10" fill="none" stroke="#444B6A"/>
+  <text x="360" y="229" text-anchor="middle" font-size="12" class="windowed-label motion">Windowed · transparency restored</text>
+  <text x="360" y="229" text-anchor="middle" font-size="12" class="full motion" style="fill:#41A6B5">Fullscreen · opaque surface, no background blending</text>
+</svg>

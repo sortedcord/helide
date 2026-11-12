@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="260" viewBox="0 0 720 260" role="img" aria-labelledby="title desc">
+  <title id="title">Structured MCP browser tools</title>
+  <desc id="desc">An agent inspects a page, fills a field and clicks a button using element references. The matching browser elements highlight in sequence; no agent-written JavaScript is needed.</desc>
+  <defs><style>
+    text{font-family:system-ui,sans-serif;fill:#D5D6DB}.small{font-size:11px;fill:#787C99}.code{font-family:ui-monospace,monospace;font-size:12px}
+    .inspect{animation:inspect 7s ease-in-out infinite}.fill{animation:fill 7s ease-in-out infinite}.click{animation:click 7s ease-in-out infinite}.value{animation:value 7s ease-in-out infinite}
+    @keyframes inspect{0%,10%,100%{opacity:.15}15%,28%{opacity:1}35%,90%{opacity:.15}}
+    @keyframes fill{0%,28%,100%{opacity:.15}35%,55%{opacity:1}65%,95%{opacity:.15}}
+    @keyframes click{0%,55%,100%{opacity:.15}65%,85%{opacity:1}95%{opacity:.15}}
+    @keyframes value{0%,28%,100%{opacity:0}40%,90%{opacity:1}}
+    @media(prefers-reduced-motion:reduce){.motion{animation:none!important}.inspect,.fill,.click{opacity:.6}.value{opacity:1}}
+  </style></defs>
+  <rect width="720" height="260" rx="16" fill="#0e1017"/>
+  <text x="28" y="28" class="small" letter-spacing="2">STRUCTURED MCP TOOLS</text>
+  <rect x="49" y="56" width="273" height="147" rx="10" fill="#24283B" stroke="#444B6A"/>
+  <text x="69" y="80" class="small">AGENT CALLS</text>
+  <rect x="61" y="92" width="248" height="28" rx="5" fill="#8698df" fill-opacity=".25" class="inspect motion" opacity=".15"/>
+  <rect x="61" y="126" width="248" height="28" rx="5" fill="#41A6B5" fill-opacity=".25" class="fill motion" opacity=".15"/>
+  <rect x="61" y="160" width="248" height="28" rx="5" fill="#BB9AF7" fill-opacity=".25" class="click motion" opacity=".15"/>
+  <text x="72" y="111" class="code">page_inspect(tab_id)</text>
+  <text x="72" y="145" class="code">page_fill(ref, value)</text>
+  <text x="72" y="179" class="code">page_click(ref)</text>
+  <path d="M337 129H375 M369 123l6 6-6 6" stroke="#787C99" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="392" y="56" width="277" height="147" rx="10" fill="#24283B" stroke="#444B6A"/>
+  <rect x="404" y="68" width="253" height="123" rx="6" fill="none" stroke="#8698df" stroke-width="2" class="inspect motion" opacity=".15"/>
+  <text x="416" y="92" font-size="13">Find something useful</text>
+  <rect x="416" y="107" width="229" height="31" rx="5" fill="#0e1017" stroke="#444B6A"/>
+  <rect x="416" y="107" width="229" height="31" rx="5" fill="none" stroke="#41A6B5" stroke-width="2" class="fill motion" opacity=".15"/>
+  <text x="427" y="127" font-size="12" class="value motion">Wayland on Linux</text>
+  <rect x="416" y="151" width="87" height="28" rx="6" fill="#8698df"/>
+  <rect x="412" y="147" width="95" height="36" rx="8" fill="none" stroke="#BB9AF7" stroke-width="2" class="click motion" opacity=".15"/>
+  <text x="435" y="170" font-size="12" style="fill:#0e1017">Search</text>
+  <text x="360" y="237" text-anchor="middle" class="small">EXPLICIT TABS · ELEMENT REFERENCES · NO AD-HOC JAVASCRIPT</text>
+</svg>

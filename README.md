@@ -22,12 +22,6 @@ show the desktop behind the window. Webpages keep an opaque backing by default;
 website transparency is opt-in and respects the site's CSS. Text, images, and
 browser controls keep their normal opacity. These features are off by default.
 
-## Demo
-
-[![Helide transparency demonstration](docs/media/transparency-demo.gif)](docs/media/transparency-demo.mp4)
-
-Animated preview — click it to [watch the full-resolution recording](docs/media/transparency-demo.mp4).
-
 Helide is based on Helium Linux `0.20.3.1`, shared Helium commit
 `2f81b9cafa38a95071e20de3f9cd6b0aca6d3c65`, and Chromium `156.0.8078.79`.
 It requires a native Wayland session and client side browser decorations. The
@@ -198,6 +192,10 @@ kills the build and not your session.
 
 ## Settings
 
+<p align="center">
+  <img src="docs/illustrations/appearance.svg" alt="The window tint fades over softly blurred desktop colors while text and controls stay crisp." width="720">
+</p>
+
 On native Wayland, **Settings → Appearance** shows three controls, below the
 rounded-frame option, and **Settings → Behavior** shows the page-slide swipe
 toggle (see [Slide pages when swiping](#slide-pages-when-swiping)). They are
@@ -225,6 +223,10 @@ can take effect. Flags and switches are read at startup.
 
 
 ## Let AI agents control Helide
+
+<p align="center">
+  <img src="docs/illustrations/agent-tabs.svg" alt="An agent works in its collapsed tab group while your selected tab stays unchanged." width="720">
+</p>
 
 **Settings → Behavior → Let AI agents control Helide** keeps Chromium's remote
 debugging server (the DevTools protocol, CDP) running on `127.0.0.1:9222`, with
@@ -264,6 +266,10 @@ used when this setting is off.
 
 ### Helide MCP server
 
+<p align="center">
+  <img src="docs/illustrations/mcp-tools.svg" alt="Structured inspect, fill and click calls highlight the corresponding browser elements in sequence." width="720">
+</p>
+
 The [`mcp/`](mcp/README.md) directory contains an attach-only TypeScript MCP
 server for this endpoint. It provides 18 core tools for tabs, page reading,
 element-based interaction, screenshots, dialogs, uploads and downloads. Agents
@@ -274,6 +280,10 @@ See [setup, tools and tests](mcp/README.md). History and media controls are plan
 next, not part of the initial toolset. No Chromium rebuild is required.
 
 ## Energy saver on Linux
+
+<p align="center">
+  <img src="docs/illustrations/energy-saver.svg" alt="Linux battery and power-profile signals enable Energy Saver and reduce background activity." width="720">
+</p>
 
 Energy saver is in **Settings → Performance**. It needs no setup: Helide reads the
 battery from sysfs and UPower. Each rule works as follows:
@@ -289,7 +299,22 @@ Energy saver throttles background tabs, limits frame rates and reduces timer
 frequency. With the Energy saver toggle off, the power-saver profile has no
 effect on Helide.
 
+## Opaque fullscreen
+
+<p align="center">
+  <img src="docs/illustrations/fullscreen.svg" alt="A window expands into an opaque fullscreen surface, then regains transparency on exit." width="720">
+</p>
+
+Fullscreen drops the window's transparency and blur and declares its surface
+opaque, allowing the compositor to skip background blending. Where the graphics
+stack permits it, this can also help fullscreen video use direct scanout.
+Leaving fullscreen restores your windowed appearance settings automatically.
+
 ## Slide pages when swiping
+
+<p align="center">
+  <img src="docs/illustrations/swipe.svg" alt="A two-finger swipe slides the current page aside to reveal the previous page; the toolbar stays fixed." width="720">
+</p>
 
 On native Wayland, a two-finger horizontal swipe on the touchpad slides the page
 with your fingers, like Safari on macOS. The pages behave as a stack: going back,
@@ -416,6 +441,10 @@ See [niri's blur configuration](https://github.com/niri-wm/niri/wiki/Configurati
 and the [Wayland background-effect protocol](https://wayland.app/protocols/ext-background-effect-v1).
 
 ## Transparent website backgrounds
+
+<p align="center">
+  <img src="docs/illustrations/website-transparency.svg" alt="Opting into transparent website backgrounds reveals the desktop while images, text and explicitly painted surfaces remain opaque." width="720">
+</p>
 
 Turn on **Settings → Appearance → Transparent website backgrounds**, or enable
 **Transparent web content on Wayland** at
