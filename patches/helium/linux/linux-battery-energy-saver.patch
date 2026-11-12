@@ -1,0 +1,506 @@
+--- a/base/BUILD.gn
++++ b/base/BUILD.gn
+@@ -1111,6 +1111,11 @@
+     ]
+   }
+ 
++  if (is_linux) {
++    # Helium: battery state from /sys/class/power_supply.
++    sources += [ "power_monitor/battery_level_provider_linux.cc" ]
++  }
++
+   if (is_chromeos) {
+     sources += [
+       "process/process_priority_delegate.h",
+@@ -3134,7 +3139,7 @@
+ buildflag_header("power_monitor_buildflags") {
+   header = "power_monitor_buildflags.h"
+   header_dir = "base/power_monitor"
+-  _has_battery_provider_impl = is_win || is_mac
++  _has_battery_provider_impl = is_win || is_mac || is_linux
+ 
+   flags = [ "HAS_BATTERY_LEVEL_PROVIDER_IMPL=$_has_battery_provider_impl" ]
+ }
+--- a/chrome/browser/performance_manager/BUILD.gn
++++ b/chrome/browser/performance_manager/BUILD.gn
+@@ -235,6 +235,13 @@
+       "//third_party/perfetto:libperfetto",
+       "//ui/accessibility:ax_base",
+     ]
++    if (is_linux && use_dbus) {
++      # Helium: Energy Saver follows the system power-saver profile.
++      deps += [
++        "//build/config/linux/dbus:buildflags",
++        "//components/power_monitor",
++      ]
++    }
+   }
+ 
+   if (is_chromeos) {
+--- a/chrome/browser/performance_manager/user_tuning/battery_saver_mode_manager.cc
++++ b/chrome/browser/performance_manager/user_tuning/battery_saver_mode_manager.cc
+@@ -9,6 +9,7 @@
+ 
+ #include "base/check.h"
+ #include "base/check_deref.h"
++#include "base/callback_list.h"
+ #include "base/check_is_test.h"
+ #include "base/command_line.h"
+ #include "base/feature_list.h"
+@@ -23,6 +24,7 @@
+ #include "base/scoped_multi_source_observation.h"
+ #include "base/strings/string_number_conversions.h"
+ #include "base/values.h"
++#include "build/build_config.h"
+ #include "components/performance_manager/freezing/freezing_policy.h"
+ #include "components/performance_manager/performance_manager_impl.h"
+ #include "components/performance_manager/public/features.h"
+@@ -37,6 +39,14 @@
+ #include "content/public/browser/render_process_host_creation_observer.h"
+ #include "content/public/browser/render_process_host_observer.h"
+ #include "content/public/common/content_features.h"
++
++#if BUILDFLAG(IS_LINUX)
++#include "build/config/linux/dbus/buildflags.h"
++#if BUILDFLAG(USE_DBUS)
++#include "components/power_monitor/power_monitor_device_source_linux.h"
++#define HELIUM_FOLLOW_POWER_SAVER_PROFILE 1
++#endif
++#endif
+ 
+ #if BUILDFLAG(IS_CHROMEOS)
+ #include "ash/constants/ash_features.h"
+@@ -218,6 +228,18 @@
+       has_battery_ = true;
+     }
+ 
++#if defined(HELIUM_FOLLOW_POWER_SAVER_PROFILE)
++    // Helium: the system power-saver profile turns Energy Saver on too,
++    // whatever rule (unplugged / low battery) the user picked.
++    os_power_saver_enabled_ =
++        PowerMonitorDeviceSourceLinux::IsPowerSaverEnabled();
++    power_saver_subscription_ =
++        PowerMonitorDeviceSourceLinux::AddPowerSaverCallback(
++            base::BindRepeating(
++                &DesktopBatterySaverProvider::OnPowerSaverProfileChanged,
++                base::Unretained(this)));
++#endif
++
+     pref_change_registrar_.Init(local_state);
+ 
+     pref_change_registrar_.Add(
+@@ -316,6 +338,10 @@
+           battery_saver_mode_enabled_ = false;
+           break;
+       }
++      if (os_power_saver_enabled_ &&
++          state != BatterySaverModeState::kDisabled) {
++        battery_saver_mode_enabled_ = true;
++      }
+     }
+ 
+     // Don't change throttling or notify observers if the mode didn't change.
+@@ -405,8 +431,16 @@
+     UpdateBatterySaverModeState();
+   }
+ 
++  void OnPowerSaverProfileChanged(bool enabled) {
++    os_power_saver_enabled_ = enabled;
++    UpdateBatterySaverModeState();
++  }
++
+   bool battery_saver_mode_enabled_ = false;
+   bool battery_saver_mode_disabled_for_session_ = false;
++  // Helium: the system power-saver profile is active.
++  bool os_power_saver_enabled_ = false;
++  base::CallbackListSubscription power_saver_subscription_;
+ 
+   bool has_battery_ = false;
+   bool force_has_battery_ = false;
+--- a/components/power_monitor/power_monitor_device_source_linux.cc
++++ b/components/power_monitor/power_monitor_device_source_linux.cc
+@@ -11,6 +11,7 @@
+ #include "base/functional/callback.h"
+ #include "base/location.h"
+ #include "base/logging.h"
++#include "base/no_destructor.h"
+ #include "base/memory/scoped_refptr.h"
+ #include "components/dbus/thread_linux/dbus_thread_linux.h"
+ #include "components/dbus/xdg/portal.h"
+@@ -27,11 +28,35 @@
+     "org.freedesktop.portal.PowerProfileMonitor";
+ constexpr char kPowerSaverEnabledProperty[] = "power-saver-enabled";
+ 
++constexpr char kUPowerServiceName[] = "org.freedesktop.UPower";
++constexpr char kUPowerObjectPath[] = "/org/freedesktop/UPower";
++constexpr char kUPowerInterface[] = "org.freedesktop.UPower";
++constexpr char kUPowerOnBatteryProperty[] = "OnBattery";
++
+ constexpr char kDBusPropertiesInterface[] = "org.freedesktop.DBus.Properties";
+ constexpr char kDBusPropertiesGet[] = "Get";
+ constexpr char kPortalPropertiesChangedSignal[] = "PropertiesChanged";
+ 
++bool g_power_saver_enabled = false;
++
++base::RepeatingCallbackList<void(bool)>& PowerSaverCallbacks() {
++  static base::NoDestructor<base::RepeatingCallbackList<void(bool)>> callbacks;
++  return *callbacks;
++}
++
+ }  // namespace
++
++// static
++bool PowerMonitorDeviceSourceLinux::IsPowerSaverEnabled() {
++  return g_power_saver_enabled;
++}
++
++// static
++base::CallbackListSubscription
++PowerMonitorDeviceSourceLinux::AddPowerSaverCallback(
++    base::RepeatingCallback<void(bool)> callback) {
++  return PowerSaverCallbacks().Add(std::move(callback));
++}
+ 
+ PowerMonitorDeviceSourceLinux::PowerMonitorDeviceSourceLinux()
+     : PowerMonitorDeviceSourceLinux(dbus_thread_linux::GetSharedSystemBus(),
+@@ -54,6 +79,23 @@
+           base::BindOnce(&PowerMonitorDeviceSourceLinux::OnSignalConnected,
+                          weak_ptr_factory_.GetWeakPtr()));
+ 
++  // Helium: follow AC/battery changes. UPower emits PropertiesChanged when
++  // the charger is plugged in or out, so this needs no polling.
++  upower_proxy_ = system_bus_->GetObjectProxy(
++      kUPowerServiceName, dbus::ObjectPath(kUPowerObjectPath));
++  dbus_utils::ConnectToSignal<"sa{sv}as">(
++      upower_proxy_, kDBusPropertiesInterface, kPortalPropertiesChangedSignal,
++      base::BindRepeating(
++          &PowerMonitorDeviceSourceLinux::OnUPowerPropertiesChanged,
++          weak_ptr_factory_.GetWeakPtr()),
++      base::BindOnce(&PowerMonitorDeviceSourceLinux::OnSignalConnected,
++                     weak_ptr_factory_.GetWeakPtr()));
++  dbus_utils::CallMethod<"ss", "v">(
++      upower_proxy_, kDBusPropertiesInterface, kDBusPropertiesGet,
++      base::BindOnce(&PowerMonitorDeviceSourceLinux::OnGetOnBattery,
++                     weak_ptr_factory_.GetWeakPtr()),
++      kUPowerInterface, kUPowerOnBatteryProperty);
++
+   dbus_xdg::RequestXdgDesktopPortal(
+       session_bus_.get(),
+       base::BindOnce(&PowerMonitorDeviceSourceLinux::OnPortalRequested,
+@@ -64,12 +106,13 @@
+ 
+ base::PowerStateObserver::BatteryPowerStatus
+ PowerMonitorDeviceSourceLinux::GetBatteryPowerStatus() const {
+-  if (power_saver_enabled_) {
++  // Power-saver mode asks for battery-like behaviour even on AC.
++  if (power_saver_enabled_ || on_battery_.value_or(false)) {
+     return base::PowerStateObserver::BatteryPowerStatus::kBatteryPower;
+   }
+-  // TODO(crbug.com/40836663): Use org.freedesktop.UPower to check for
+-  // OnBattery. One possibility is to connect to the DeviceService's
+-  // BatteryMonitor.
++  if (on_battery_.has_value()) {
++    return base::PowerStateObserver::BatteryPowerStatus::kExternalPower;
++  }
+   return base::PowerStateObserver::BatteryPowerStatus::kUnknown;
+ }
+ 
+@@ -159,4 +202,49 @@
+   }
+   power_saver_enabled_ = enabled;
+   ProcessPowerEvent(POWER_STATE_EVENT);
+-}
++  g_power_saver_enabled = enabled;
++  PowerSaverCallbacks().Notify(enabled);
++}
++
++void PowerMonitorDeviceSourceLinux::OnGetOnBattery(
++    dbus_utils::CallMethodResultSig<"v"> result) {
++  if (!result.has_value()) {
++    DLOG(WARNING) << "Failed to get UPower OnBattery property";
++    return;
++  }
++
++  auto [variant] = std::move(*result);
++  std::optional<bool> on_battery = std::move(variant).Take<bool>();
++  if (on_battery.has_value()) {
++    SetOnBattery(*on_battery);
++  }
++}
++
++void PowerMonitorDeviceSourceLinux::OnUPowerPropertiesChanged(
++    dbus_utils::ConnectToSignalResultSig<"sa{sv}as"> result) {
++  if (!result.has_value()) {
++    return;
++  }
++
++  auto [interface_name, changed_properties, invalidated_properties] =
++      std::move(*result);
++  if (interface_name != kUPowerInterface) {
++    return;
++  }
++
++  auto it = changed_properties.find(kUPowerOnBatteryProperty);
++  if (it != changed_properties.end()) {
++    std::optional<bool> on_battery = std::move(it->second).Take<bool>();
++    if (on_battery.has_value()) {
++      SetOnBattery(*on_battery);
++    }
++  }
++}
++
++void PowerMonitorDeviceSourceLinux::SetOnBattery(bool on_battery) {
++  if (on_battery_ == on_battery) {
++    return;
++  }
++  on_battery_ = on_battery;
++  ProcessPowerEvent(POWER_STATE_EVENT);
++}
+--- a/components/power_monitor/power_monitor_device_source_linux.h
++++ b/components/power_monitor/power_monitor_device_source_linux.h
+@@ -5,8 +5,11 @@
+ #ifndef COMPONENTS_POWER_MONITOR_POWER_MONITOR_DEVICE_SOURCE_LINUX_H_
+ #define COMPONENTS_POWER_MONITOR_POWER_MONITOR_DEVICE_SOURCE_LINUX_H_
+ 
++#include <optional>
+ #include <string>
+ 
++#include "base/callback_list.h"
++#include "base/functional/callback_forward.h"
+ #include "base/memory/raw_ptr.h"
+ #include "base/memory/scoped_refptr.h"
+ #include "base/memory/weak_ptr.h"
+@@ -20,9 +23,9 @@
+ class Signal;
+ }  // namespace dbus
+ 
+-// A PowerMonitorSource that observes sleep/resume signals issued by systemd
+-// and power-saver status issued by XDG PowerProfileMonitor portal on Linux
+-// systems.
++// A PowerMonitorSource that observes sleep/resume signals issued by systemd,
++// AC/battery status issued by UPower, and power-saver status issued by XDG
++// PowerProfileMonitor portal on Linux systems.
+ class PowerMonitorDeviceSourceLinux : public base::PowerMonitorSource {
+  public:
+   PowerMonitorDeviceSourceLinux();
+@@ -37,6 +40,13 @@
+   base::PowerStateObserver::BatteryPowerStatus GetBatteryPowerStatus()
+       const override;
+ 
++  // Helium: whether the system power-saver profile (power-profiles-daemon,
++  // via the XDG PowerProfileMonitor portal) is active, and a way to follow
++  // it. Browser process, UI thread.
++  static bool IsPowerSaverEnabled();
++  static base::CallbackListSubscription AddPowerSaverCallback(
++      base::RepeatingCallback<void(bool)> callback);
++
+  private:
+   void OnSignalConnected(const std::string& interface_name,
+                          const std::string& signal_name,
+@@ -47,11 +57,18 @@
+   void OnPropertiesChanged(
+       dbus_utils::ConnectToSignalResultSig<"sa{sv}as"> result);
+   void SetPowerSaverEnabled(bool enabled);
++  void OnGetOnBattery(dbus_utils::CallMethodResultSig<"v"> result);
++  void OnUPowerPropertiesChanged(
++      dbus_utils::ConnectToSignalResultSig<"sa{sv}as"> result);
++  void SetOnBattery(bool on_battery);
+ 
+   scoped_refptr<dbus::Bus> system_bus_;
+   scoped_refptr<dbus::Bus> session_bus_;
+   raw_ptr<dbus::ObjectProxy> portal_proxy_ = nullptr;
++  raw_ptr<dbus::ObjectProxy> upower_proxy_ = nullptr;
+   bool power_saver_enabled_ = false;
++  // UPower's OnBattery property; nullopt until UPower has answered.
++  std::optional<bool> on_battery_;
+ 
+   base::WeakPtrFactory<PowerMonitorDeviceSourceLinux> weak_ptr_factory_{this};
+ };
+--- /dev/null
++++ b/base/power_monitor/battery_level_provider_linux.cc
+@@ -0,0 +1,185 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++// Battery state on Linux, read from the kernel's power_supply class in sysfs
++// (/sys/class/power_supply). This lets the BatteryStateSampler, and with it
++// Energy Saver, know that the device has a battery and how full it is.
++
++#include <stdint.h>
++
++#include <optional>
++#include <string>
++#include <string_view>
++#include <vector>
++
++#include "base/files/file_enumerator.h"
++#include "base/files/file_path.h"
++#include "base/files/file_util.h"
++#include "base/functional/bind.h"
++#include "base/functional/callback.h"
++#include "base/location.h"
++#include "base/memory/scoped_refptr.h"
++#include "base/memory/weak_ptr.h"
++#include "base/power_monitor/battery_level_provider.h"
++#include "base/strings/string_number_conversions.h"
++#include "base/strings/string_util.h"
++#include "base/task/sequenced_task_runner.h"
++#include "base/task/task_traits.h"
++#include "base/task/thread_pool.h"
++#include "base/threading/scoped_blocking_call.h"
++
++namespace base {
++
++namespace {
++
++constexpr char kPowerSupplyPath[] = "/sys/class/power_supply";
++
++// sysfs attributes are short; anything longer is not a value we understand.
++constexpr size_t kMaxAttributeSize = 64;
++
++std::optional<std::string> ReadAttribute(const FilePath& supply,
++                                         std::string_view name) {
++  std::string value;
++  if (!ReadFileToStringWithMaxSize(supply.Append(name), &value,
++                                   kMaxAttributeSize)) {
++    return std::nullopt;
++  }
++  return std::string(TrimWhitespaceASCII(value, TRIM_ALL));
++}
++
++std::optional<uint64_t> ReadUint64Attribute(const FilePath& supply,
++                                            std::string_view name) {
++  const std::optional<std::string> value = ReadAttribute(supply, name);
++  uint64_t number = 0;
++  if (!value || !StringToUint64(*value, &number)) {
++    return std::nullopt;
++  }
++  return number;
++}
++
++// Supplies with "Device" scope power a peripheral (a mouse, a headset, a
++// USB-C port's own controller), not the system.
++bool IsSystemSupply(const FilePath& supply) {
++  const std::optional<std::string> scope = ReadAttribute(supply, "scope");
++  return !scope || *scope != "Device";
++}
++
++class BatteryLevelProviderLinux : public BatteryLevelProvider {
++ public:
++  BatteryLevelProviderLinux() = default;
++  ~BatteryLevelProviderLinux() override = default;
++
++  void GetBatteryState(
++      OnceCallback<void(const std::optional<BatteryState>&)> callback)
++      override {
++    // sysfs reads block, so run them off the calling sequence.
++    blocking_task_runner_->PostTaskAndReplyWithResult(
++        FROM_HERE, BindOnce(&BatteryLevelProviderLinux::GetBatteryStateImpl),
++        BindOnce(&BatteryLevelProviderLinux::OnBatteryStateObtained,
++                 weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
++  }
++
++ private:
++  static std::optional<BatteryState> GetBatteryStateImpl() {
++    ScopedBlockingCall scoped_blocking_call(FROM_HERE, BlockingType::MAY_BLOCK);
++
++    std::vector<BatteryDetails> batteries;
++    bool has_external_supply = false;
++    bool external_supply_online = false;
++
++    // The entries are symlinks to the devices' directories; following them
++    // (the default) makes them enumerate as directories.
++    FileEnumerator enumerator(FilePath(kPowerSupplyPath), /*recursive=*/false,
++                              FileEnumerator::DIRECTORIES);
++    for (FilePath supply = enumerator.Next(); !supply.empty();
++         supply = enumerator.Next()) {
++      const std::optional<std::string> type = ReadAttribute(supply, "type");
++      if (!type || !IsSystemSupply(supply)) {
++        continue;
++      }
++
++      if (*type == "Mains" || StartsWith(*type, "USB")) {
++        has_external_supply = true;
++        if (ReadAttribute(supply, "online") == "1") {
++          external_supply_online = true;
++        }
++        continue;
++      }
++
++      if (*type != "Battery" || ReadAttribute(supply, "present") == "0") {
++        continue;
++      }
++
++      BatteryDetails details;
++      // Until an external supply says otherwise, trust the battery's own
++      // status. A battery held at a charge limit reports "Not charging" on
++      // AC, so only "Discharging" means running on it.
++      details.is_external_power_connected =
++          ReadAttribute(supply, "status") != "Discharging";
++
++      // Prefer energy (µWh) over charge (µAh) over a plain percentage.
++      const std::optional<uint64_t> energy_now =
++          ReadUint64Attribute(supply, "energy_now");
++      const std::optional<uint64_t> energy_full =
++          ReadUint64Attribute(supply, "energy_full");
++      const std::optional<uint64_t> charge_now =
++          ReadUint64Attribute(supply, "charge_now");
++      const std::optional<uint64_t> charge_full =
++          ReadUint64Attribute(supply, "charge_full");
++      const std::optional<uint64_t> capacity =
++          ReadUint64Attribute(supply, "capacity");
++      if (energy_now && energy_full && *energy_full > 0) {
++        details.current_capacity = *energy_now / 1000;
++        details.full_charged_capacity = *energy_full / 1000;
++        details.charge_unit = BatteryLevelUnit::kMWh;
++      } else if (charge_now && charge_full && *charge_full > 0) {
++        details.current_capacity = *charge_now / 1000;
++        details.full_charged_capacity = *charge_full / 1000;
++        details.charge_unit = BatteryLevelUnit::kMAh;
++      } else if (capacity) {
++        details.current_capacity = *capacity;
++        details.full_charged_capacity = 100;
++        details.charge_unit = BatteryLevelUnit::kRelative;
++      } else {
++        continue;
++      }
++
++      if (const std::optional<uint64_t> voltage_uv =
++              ReadUint64Attribute(supply, "voltage_now")) {
++        details.voltage_mv = *voltage_uv / 1000;
++      }
++      batteries.push_back(details);
++    }
++
++    // A mains or USB supply is the more direct signal for "plugged in".
++    if (has_external_supply) {
++      for (BatteryDetails& details : batteries) {
++        details.is_external_power_connected = external_supply_online;
++      }
++    }
++
++    return MakeBatteryState(batteries);
++  }
++
++  void OnBatteryStateObtained(
++      OnceCallback<void(const std::optional<BatteryState>&)> callback,
++      const std::optional<BatteryState>& battery_state) {
++    std::move(callback).Run(battery_state);
++  }
++
++  scoped_refptr<SequencedTaskRunner> blocking_task_runner_{
++      ThreadPool::CreateSequencedTaskRunner(
++          {MayBlock(), TaskPriority::BEST_EFFORT,
++           TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN})};
++
++  WeakPtrFactory<BatteryLevelProviderLinux> weak_ptr_factory_{this};
++};
++
++}  // namespace
++
++std::unique_ptr<BatteryLevelProvider> BatteryLevelProvider::Create() {
++  return std::make_unique<BatteryLevelProviderLinux>();
++}
++
++}  // namespace base

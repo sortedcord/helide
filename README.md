@@ -55,6 +55,19 @@ The Linux patch is [`patches/helium/linux/wayland-frame-opacity.patch`](patches/
   [`wayland-swipe-page-preview.patch`](patches/helium/linux/wayland-swipe-page-preview.patch),
   with a toggle in **Settings → Behavior**.
 
+- Makes Chromium see the battery on Linux, in
+  [`linux-battery-energy-saver.patch`](patches/helium/linux/linux-battery-energy-saver.patch).
+  Battery state comes from `/sys/class/power_supply`, and AC or battery status
+  from UPower. **Settings → Performance → Energy saver** therefore appears on
+  Linux, and its "when unplugged" and "low battery" rules work. The system
+  power-saver profile (power-profiles-daemon) also turns Energy saver on, when
+  the Energy saver toggle is on.
+- Makes fullscreen windows opaque, in
+  [`wayland-fullscreen-opaque.patch`](patches/helium/linux/wayland-fullscreen-opaque.patch).
+  While a window is fullscreen the transparency and blur are dropped and the
+  window is declared opaque. The compositor then skips blending it, and can
+  scan fullscreen video out directly. The transparency comes back on exit.
+
 The shared Helium [native materials patch](helium-chromium/patches/helium/ui/native-frame-materials.patch) contains the existing UI painting hooks. The Linux patches extend those hooks with Wayland compositing and website transparency.
 
 ## Build
@@ -122,6 +135,22 @@ Leave a flag on **Default** to use the Settings value. If an opacity flag was
 previously enabled in `helium://flags`, reset it to Default so the Settings slider
 can take effect. Flags and switches are read at startup.
 
+
+## Energy saver on Linux
+
+Energy saver is in **Settings → Performance**. It needs no setup: Helium reads the
+battery from sysfs and UPower. Each rule works as follows:
+
+- **Turn on when your computer is unplugged** or **Turn on at 20% battery**: as
+  on other platforms.
+- **System power-saver profile**: when power-profiles-daemon is in `power-saver`
+  (`powerprofilesctl get`), Energy saver turns on too, whichever rule you chose,
+  as long as the Energy saver toggle is on. Switching the profile back turns it
+  off again.
+
+Energy saver throttles background tabs, limits frame rates and reduces timer
+frequency. With the Energy saver toggle off, the power-saver profile has no
+effect on Helium.
 
 ## Slide pages when swiping
 

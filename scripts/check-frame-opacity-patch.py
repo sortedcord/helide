@@ -43,6 +43,8 @@ def main():
             "helium/linux/wayland-web-content-lifecycle.patch",
             "helium/linux/wayland-settings.patch",
             "helium/linux/wayland-swipe-page-preview.patch",
+            "helium/linux/linux-battery-energy-saver.patch",
+            "helium/linux/wayland-fullscreen-opaque.patch",
         ],
     )
     selected = parser.parse_args().patch
