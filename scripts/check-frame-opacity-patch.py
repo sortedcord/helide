@@ -45,6 +45,8 @@ def main():
             "helium/linux/wayland-swipe-page-preview.patch",
             "helium/linux/linux-battery-energy-saver.patch",
             "helium/linux/wayland-fullscreen-opaque.patch",
+            "helium/linux/helium-agent-access.patch",
+            "helium/linux/helium-target-march.patch",
         ],
     )
     selected = parser.parse_args().patch

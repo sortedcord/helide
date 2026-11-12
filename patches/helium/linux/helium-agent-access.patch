@@ -1,0 +1,632 @@
+--- a/chrome/app/settings_strings.grdp
++++ b/chrome/app/settings_strings.grdp
+@@ -314,6 +314,12 @@
+     </message>
+     <message name="IDS_SETTINGS_WAYLAND_SWIPE_PAGE_PREVIEW_DESCRIPTION" desc="Description for the toggle which makes two-finger swipes between pages slide the page and show the previous or next page underneath.">
+       A two-finger swipe left or right on the touchpad moves the page and reveals the previous or next page, instead of only showing an arrow.
++    </message>
++    <message name="IDS_SETTINGS_AGENT_ACCESS" desc="Label for the toggle which lets AI agents and other automation tools control the browser.">
++      Let AI agents control Helium
++    </message>
++    <message name="IDS_SETTINGS_AGENT_ACCESS_DESCRIPTION" desc="Description for the toggle which lets AI agents and other automation tools control the browser through the DevTools protocol on a local port.">
++      Agents and automation tools on this computer can connect to http://127.0.0.1:9222 without a prompt. Tabs they open stay in the background, in a collapsed Agent tab group, and cannot take focus from you. Anything running as your user can then read and control every tab and your signed-in sessions, so only turn this on if you use agents.
+     </message>
+     <message name="IDS_SETTINGS_LAYOUT" desc="Title of the settings section which controls how the browser UI is laid out.">
+       Layout
+--- a/chrome/browser/browser_process_impl.cc
++++ b/chrome/browser/browser_process_impl.cc
+@@ -1371,6 +1371,7 @@
+                                 GoogleUpdateSettings::GetCollectStatsConsent());
+   registry->RegisterBooleanPref(prefs::kDevToolsRemoteDebuggingAllowed, true);
+   registry->RegisterBooleanPref(prefs::kDevToolsRemoteDebuggingEnabled, false);
++  registry->RegisterBooleanPref(prefs::kHeliumAgentAccessEnabled, false);
+ 
+ #if BUILDFLAG(IS_LINUX) && BUILDFLAG(USE_DBUS)
+   os_crypt_async::SecretPortalKeyProvider::RegisterLocalPrefs(registry);
+--- a/chrome/browser/devtools/BUILD.gn
++++ b/chrome/browser/devtools/BUILD.gn
+@@ -515,7 +515,10 @@
+   }
+ 
+   if (!is_android) {
+-    deps += [ "//chrome/browser/ui:browser_tab_strip_tracker" ]
++    deps += [
++      "//chrome/browser/ui:browser_tab_strip_tracker",
++      "//chrome/browser/ui/helium:helium_agent_tabs",
++    ]
+   }
+ }
+ 
+--- a/chrome/browser/devtools/chrome_devtools_manager_delegate.cc
++++ b/chrome/browser/devtools/chrome_devtools_manager_delegate.cc
+@@ -15,6 +15,9 @@
+ #include "base/values.h"
+ #include "build/build_config.h"
+ #include "chrome/browser/devtools/chrome_devtools_session.h"
++#if !BUILDFLAG(IS_ANDROID)
++#include "chrome/browser/ui/helium/helium_agent_tabs.h"
++#endif
+ #include "chrome/browser/devtools/device/android_device_manager.h"
+ #include "chrome/browser/devtools/device/tcp_device_provider.h"
+ #include "chrome/browser/devtools/devtools_availability_checker.h"
+@@ -288,6 +291,18 @@
+   devtools_window->ActivateWindow();
+ }
+ 
++bool ChromeDevToolsManagerDelegate::AllowActivationFromProtocol(
++    content::WebContents* web_contents) {
++#if !BUILDFLAG(IS_ANDROID)
++  // With agent access on, protocol clients never change the user's active tab
++  // or take focus.
++  if (helium::agent::IsAgentAccessEnabled()) {
++    return false;
++  }
++#endif
++  return true;
++}
++
+ void ChromeDevToolsManagerDelegate::HandleCommand(
+     content::DevToolsAgentHostClientChannel* channel,
+     base::span<const uint8_t> message,
+@@ -438,10 +453,23 @@
+     bool new_window) {
+   NavigateParams params(ProfileManager::GetLastUsedProfile(), url,
+                         ui::PAGE_TRANSITION_AUTO_TOPLEVEL);
++#if !BUILDFLAG(IS_ANDROID)
++  // With agent access on, tabs made by protocol clients open in the
++  // background, in the Agent group, so they don't interrupt the user.
++  const bool for_agent = helium::agent::IsAgentAccessEnabled();
++  params.disposition = for_agent ? WindowOpenDisposition::NEW_BACKGROUND_TAB
++                                 : WindowOpenDisposition::NEW_FOREGROUND_TAB;
++#else
+   params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
++#endif
+   Navigate(&params);
+   if (!params.navigated_or_inserted_contents)
+     return nullptr;
++#if !BUILDFLAG(IS_ANDROID)
++  if (for_agent) {
++    helium::agent::AdoptAgentTab(params.navigated_or_inserted_contents);
++  }
++#endif
+   return target_type == DevToolsManagerDelegate::kTab
+              ? DevToolsAgentHost::GetOrCreateForTab(
+                    params.navigated_or_inserted_contents)
+--- a/chrome/browser/devtools/chrome_devtools_manager_delegate.h
++++ b/chrome/browser/devtools/chrome_devtools_manager_delegate.h
+@@ -74,6 +74,7 @@
+       const content::DevToolsManagerDelegate::DevToolsOptions& devtools_options)
+       override;
+   void Activate(content::DevToolsAgentHost* agent_host) override;
++  bool AllowActivationFromProtocol(content::WebContents* web_contents) override;
+   void HandleCommand(content::DevToolsAgentHostClientChannel* channel,
+                      base::span<const uint8_t> message,
+                      NotHandledCallback callback) override;
+--- a/chrome/browser/devtools/protocol/target_handler.cc
++++ b/chrome/browser/devtools/protocol/target_handler.cc
+@@ -9,6 +9,7 @@
+ 
+ #include "base/notreached.h"
+ #include "chrome/browser/devtools/chrome_devtools_manager_delegate.h"
++#include "chrome/browser/ui/helium/helium_agent_tabs.h"
+ #include "chrome/browser/devtools/devtools_browser_context_manager.h"
+ #include "chrome/browser/profiles/profile_manager.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+@@ -122,9 +123,18 @@
+   }
+ 
+   bool create_new_window = new_window.value_or(false);
+-  const bool should_focus = focus.value_or(!background.value_or(false));
+-  const bool create_in_background =
++  bool should_focus = focus.value_or(!background.value_or(false));
++  bool create_in_background =
+       background.value_or(false) || (focus.has_value() && !focus.value());
++  // Helium: with agent access on, clients never take the user's focus. The
++  // tab opens in the background, in the user's current window, whatever the
++  // client asked for.
++  const bool for_agent = helium::agent::IsAgentAccessEnabled();
++  if (for_agent) {
++    should_focus = false;
++    create_in_background = true;
++    create_new_window = false;
++  }
+   if (should_focus && create_in_background) {
+     return protocol::Response::InvalidParams(
+         "Can't focus a target in the background. Use background=false "
+@@ -225,6 +235,9 @@
+   if (!params.navigated_or_inserted_contents) {
+     return protocol::Response::ServerError("Failed to open a new tab");
+   }
++  if (for_agent) {
++    helium::agent::AdoptAgentTab(params.navigated_or_inserted_contents);
++  }
+ 
+   if (set_window_position) {
+     ui::BaseWindow* browser_window = params.browser->GetWindow();
+--- a/chrome/browser/devtools/remote_debugging_server.cc
++++ b/chrome/browser/devtools/remote_debugging_server.cc
+@@ -189,6 +189,29 @@
+   return local_state->GetBoolean(prefs::kDevToolsRemoteDebuggingEnabled);
+ }
+ 
++// Helium: true if the user turned on agent access in Settings. The server then
++// runs without per-connection approval.
++bool IsAgentAccessEnabled(PrefService* local_state) {
++  return local_state->GetBoolean(prefs::kHeliumAgentAccessEnabled);
++}
++
++// Helium: whether the HTTP server should run because of a pref, and in which
++// mode. Agent access wins over the chrome://inspect approval mode.
++std::optional<content::DevToolsAgentHost::RemoteDebuggingServerMode>
++GetPrefServerMode(PrefService* local_state) {
++  if (!local_state->GetBoolean(prefs::kDevToolsRemoteDebuggingAllowed)) {
++    return std::nullopt;
++  }
++  if (IsAgentAccessEnabled(local_state)) {
++    return content::DevToolsAgentHost::RemoteDebuggingServerMode::kDefault;
++  }
++  if (isRemoteDebuggingEnabledViaPrefs(local_state)) {
++    return content::DevToolsAgentHost::RemoteDebuggingServerMode::
++        kWithApprovalOnly;
++  }
++  return std::nullopt;
++}
++
+ }  // namespace
+ 
+ int RemoteDebuggingServer::GetPortFromUserDataDir(
+@@ -222,6 +245,11 @@
+       base::BindRepeating(
+           &RemoteDebuggingServer::MaybeStartOrStopServerForPrefChange,
+           base::Unretained(this)));
++  pref_change_registrar_->Add(
++      prefs::kHeliumAgentAccessEnabled,
++      base::BindRepeating(
++          &RemoteDebuggingServer::MaybeStartOrStopServerForPrefChange,
++          base::Unretained(this)));
+   MaybeStartOrStopServerForPrefChange();
+ }
+ 
+@@ -233,8 +261,8 @@
+   // Recheck the policy and pref value in case they changed since the task was
+   // posted.
+   PrefService* local_state = pref_change_registrar_->prefs();
+-  if (!local_state->GetBoolean(prefs::kDevToolsRemoteDebuggingAllowed) ||
+-      !isRemoteDebuggingEnabledViaPrefs(local_state)) {
++  const auto mode = GetPrefServerMode(local_state);
++  if (!mode) {
+     return;
+   }
+ 
+@@ -243,8 +271,8 @@
+   StartHttpServer(
+       std::make_unique<TCPServerSocketFactoryWithPortFallback>(port),
+       output_dir,
+-      /*debug_frontend_dir=*/base::FilePath(),
+-      content::DevToolsAgentHost::RemoteDebuggingServerMode::kWithApprovalOnly);
++      /*debug_frontend_dir=*/base::FilePath(), *mode);
++  running_mode_ = *mode;
+   is_http_server_running_ = true;
+ }
+ 
+@@ -254,14 +282,23 @@
+ 
+   PrefService* local_state = pref_change_registrar_->prefs();
+ 
+-  if (!local_state->GetBoolean(prefs::kDevToolsRemoteDebuggingAllowed) ||
+-      !isRemoteDebuggingEnabledViaPrefs(local_state)) {
++  const auto wanted_mode = GetPrefServerMode(local_state);
++  if (!wanted_mode) {
+     StopHttpServer();
+     return;
+   }
+ 
+-  if (is_http_server_running_ || is_http_server_being_started_) {
++  if (is_http_server_being_started_) {
+     return;
++  }
++  if (is_http_server_running_) {
++    if (running_mode_ == *wanted_mode) {
++      return;
++    }
++    // Helium: switching between approval mode and agent access restarts the
++    // server in the new mode. The port is read back from the active-port file,
++    // so it stays the same.
++    StopHttpServer();
+   }
+ 
+   // The selected port is written to a well-known location in the profile
+--- a/chrome/browser/devtools/remote_debugging_server.h
++++ b/chrome/browser/devtools/remote_debugging_server.h
+@@ -83,6 +83,9 @@
+   // Used by MaybeStartOrStopServerForPrefChange to ensure that the server is
+   // only started once.
+   bool is_http_server_running_ = false;
++  // Helium: the mode the running HTTP server was started in.
++  content::DevToolsAgentHost::RemoteDebuggingServerMode running_mode_ =
++      content::DevToolsAgentHost::RemoteDebuggingServerMode::kWithApprovalOnly;
+   // Ensures that the server is not started twice at the same time
+   // due to the async reading of the ActivePort file.
+   bool is_http_server_being_started_ = false;
+--- a/chrome/browser/extensions/api/settings_private/prefs_util.cc
++++ b/chrome/browser/extensions/api/settings_private/prefs_util.cc
+@@ -243,6 +243,8 @@
+       settings_api::PrefType::kBoolean;
+   (*s_allowlist)[::prefs::kHeliumWaylandSwipePagePreview] =
+       settings_api::PrefType::kBoolean;
++  (*s_allowlist)[::prefs::kHeliumAgentAccessEnabled] =
++      settings_api::PrefType::kBoolean;
+ 
+   // Miscellaneous
+   (*s_allowlist)[::embedder_support::kAlternateErrorPagesEnabled] =
+--- a/chrome/browser/resources/settings/appearance_page/appearance_behavior_page.html
++++ b/chrome/browser/resources/settings/appearance_page/appearance_behavior_page.html
+@@ -36,6 +36,12 @@
+       label="$i18n{allowSplitViewDragAndDrop}">
+   </settings-toggle-button>
+ 
++  <settings-toggle-button class="hr" id="agentAccess"
++      pref-key="helium.agent_access.enabled"
++      label="$i18n{agentAccess}"
++      sub-label="$i18n{agentAccessDescription}">
++  </settings-toggle-button>
++
+   <template is="dom-if" if="[[showWaylandOptions_]]">
+     <settings-toggle-button class="hr" id="waylandSwipePagePreview"
+         pref-key="helium.browser.wayland_swipe_page_preview"
+--- a/chrome/browser/ui/browser_web_contents_delegate/BUILD.gn
++++ b/chrome/browser/ui/browser_web_contents_delegate/BUILD.gn
+@@ -33,6 +33,7 @@
+       "//chrome/browser/ui:tab_modal_confirm_dialog",
+       "//chrome/browser/ui/browser_ui_controller",
+       "//chrome/browser/ui/exclusive_access",
++      "//chrome/browser/ui/helium:helium_agent_tabs",
+       "//chrome/browser/ui/location_bar",
+       "//chrome/browser/ui/views:status_bubble",
+       "//chrome/browser/ui/views/frame:browser_view_header",
+--- a/chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.cc
++++ b/chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.cc
+@@ -8,6 +8,7 @@
+ #include "base/metrics/histogram_macros.h"
+ #include "base/notimplemented.h"
+ #include "base/trace_event/trace_event.h"
++#include "chrome/browser/ui/helium/helium_agent_tabs.h"
+ #include "chrome/app/chrome_command_ids.h"
+ #include "chrome/browser/actor/actor_util.h"
+ #include "chrome/browser/background/background_contents.h"
+@@ -749,6 +750,11 @@
+   if (index == TabStripModel::kNoTab) {
+     return;
+   }
++  // Helium: an agent's tab, or a page in it, can't take over the window.
++  if (helium::agent::IsAgentAccessEnabled() &&
++      helium::agent::IsAgentTab(contents)) {
++    return;
++  }
+   browser_->GetTabStripModel()->ActivateTabAt(index);
+   window_->Activate();
+ }
+--- a/chrome/browser/ui/helium/BUILD.gn
++++ b/chrome/browser/ui/helium/BUILD.gn
+@@ -19,3 +19,22 @@
+     "//chrome/common:constants",
+   ]
+ }
++
++source_set("helium_agent_tabs") {
++  sources = [
++    "helium_agent_tabs.cc",
++    "helium_agent_tabs.h",
++  ]
++  public_deps = [ "//base" ]
++  deps = [
++    "//chrome/browser:browser_public_dependencies",
++    "//chrome/browser/ui/browser_window",
++    "//chrome/browser/ui/tabs:tab_strip",
++    "//chrome/common:constants",
++    "//components/prefs",
++    "//components/tab_groups",
++    "//components/tabs:public",
++    "//content/public/browser",
++    "//ui/gfx/geometry",
++  ]
++}
+--- a/chrome/browser/ui/navigator/BUILD.gn
++++ b/chrome/browser/ui/navigator/BUILD.gn
+@@ -92,6 +92,7 @@
+       "//chrome/browser/ui:tab_helpers",
+       "//chrome/browser/ui/browser_ui_controller",
+       "//chrome/browser/ui/browser_window",
++      "//chrome/browser/ui/helium:helium_agent_tabs",
+       "//chrome/browser/ui/location_bar",
+       "//chrome/browser/ui/tabs:tab_strip",
+       "//chrome/browser/ui/web_applications",
+--- a/chrome/browser/ui/navigator/browser_navigator.cc
++++ b/chrome/browser/ui/navigator/browser_navigator.cc
+@@ -69,6 +69,7 @@
+ #include "components/tab_groups/tab_group_id.h"
+ #include "components/tabs/public/split_tab_data.h"
+ #include "components/tabs/public/tab_interface.h"
++#include "chrome/browser/ui/helium/helium_agent_tabs.h"
+ #include "content/public/browser/browser_url_handler.h"
+ #include "content/public/browser/navigation_controller.h"
+ #include "content/public/browser/navigation_entry.h"
+@@ -1198,8 +1199,26 @@
+ }  // namespace internal
+ 
+ base::WeakPtr<content::NavigationHandle> Navigate(NavigateParams* params) {
++  // Helium: tabs and popups opened by an agent's tab stay with the agent: in
++  // the background, in the Agent group.
++  const bool from_agent_tab =
++      helium::agent::IsAgentAccessEnabled() &&
++      helium::agent::IsAgentTab(params->source_contents) &&
++      (params->disposition == WindowOpenDisposition::NEW_FOREGROUND_TAB ||
++       params->disposition == WindowOpenDisposition::NEW_BACKGROUND_TAB ||
++       params->disposition == WindowOpenDisposition::NEW_POPUP ||
++       params->disposition == WindowOpenDisposition::NEW_WINDOW);
++  if (from_agent_tab) {
++    params->disposition = WindowOpenDisposition::NEW_BACKGROUND_TAB;
++    params->window_action = NavigateParams::WindowAction::kNoAction;
++  }
++
+   AdditionalParams additional_params;
+-  return internal::NavigateImpl(params, additional_params);
++  auto handle = internal::NavigateImpl(params, additional_params);
++  if (from_agent_tab) {
++    helium::agent::AdoptAgentTab(params->navigated_or_inserted_contents);
++  }
++  return handle;
+ }
+ 
+ void Navigate(NavigateParams* params,
+--- a/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
++++ b/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
+@@ -626,6 +626,8 @@
+       {"waylandSwipePagePreview", IDS_SETTINGS_WAYLAND_SWIPE_PAGE_PREVIEW},
+       {"waylandSwipePagePreviewDescription",
+        IDS_SETTINGS_WAYLAND_SWIPE_PAGE_PREVIEW_DESCRIPTION},
++      {"agentAccess", IDS_SETTINGS_AGENT_ACCESS},
++      {"agentAccessDescription", IDS_SETTINGS_AGENT_ACCESS_DESCRIPTION},
+       {"layoutPageTitle", IDS_SETTINGS_LAYOUT},
+       {"browserLayout", IDS_SETTINGS_BROWSER_LAYOUT},
+       {"browserLayoutClassic", IDS_SETTINGS_BROWSER_LAYOUT_CLASSIC},
+--- a/chrome/common/pref_names.h
++++ b/chrome/common/pref_names.h
+@@ -1916,6 +1916,14 @@
+ inline constexpr char kDevToolsRemoteDebuggingEnabled[] =
+     "devtools.remote_debugging.user-enabled";
+ 
++// Helium: a boolean, set in Settings, that keeps the remote debugging server
++// running on a stable loopback port without per-connection approval, so AI
++// agents and other CDP clients can attach to this running browser. Targets
++// that such clients create are opened in the background, in the "Agent" tab
++// group. Application-wide, because the debugging server is global.
++inline constexpr char kHeliumAgentAccessEnabled[] =
++    "helium.agent_access.enabled";
++
+ // Dictionary from background service to recording expiration time.
+ inline constexpr char kDevToolsBackgroundServicesExpirationDict[] =
+     "devtools.backgroundserviceexpiration";
+--- a/content/browser/devtools/protocol/page_handler.cc
++++ b/content/browser/devtools/protocol/page_handler.cc
+@@ -35,8 +35,10 @@
+ #include "content/browser/back_forward_cache/back_forward_cache_disable.h"
+ #include "content/browser/back_forward_cache/back_forward_cache_metrics.h"
+ #include "content/browser/devtools/devtools_agent_host_impl.h"
++#include "content/browser/devtools/devtools_manager.h"
+ #include "content/browser/devtools/devtools_session.h"
+ #include "content/browser/devtools/protocol/browser_handler.h"
++#include "content/public/browser/devtools_manager_delegate.h"
+ #include "content/browser/devtools/protocol/devtools_mhtml_helper.h"
+ #include "content/browser/devtools/protocol/emulation_handler.h"
+ #include "content/browser/devtools/protocol/handler_helpers.h"
+@@ -1832,6 +1834,10 @@
+ 
+   WebContentsImpl* web_contents =
+       static_cast<WebContentsImpl*>(WebContents::FromRenderFrameHost(host_));
++  DevToolsManagerDelegate* delegate = DevToolsManager::GetInstance()->delegate();
++  if (delegate && !delegate->AllowActivationFromProtocol(web_contents)) {
++    return Response::Success();
++  }
+   web_contents->Activate();
+   web_contents->GetOutermostWebContents()->Focus();
+   return Response::Success();
+--- a/content/browser/devtools/protocol/target_handler.cc
++++ b/content/browser/devtools/protocol/target_handler.cc
+@@ -1288,6 +1288,11 @@
+   if (!agent_host) {
+     return Response::InvalidParams(kTargetNotFound);
+   }
++  DevToolsManagerDelegate* delegate = DevToolsManager::GetInstance()->delegate();
++  if (delegate && agent_host->GetWebContents() &&
++      !delegate->AllowActivationFromProtocol(agent_host->GetWebContents())) {
++    return Response::Success();
++  }
+   agent_host->Activate();
+   return Response::Success();
+ }
+--- a/content/public/browser/devtools_manager_delegate.cc
++++ b/content/public/browser/devtools_manager_delegate.cc
+@@ -36,6 +36,11 @@
+ }
+ 
+ void DevToolsManagerDelegate::Activate(DevToolsAgentHost* agent_host) {}
++
++bool DevToolsManagerDelegate::AllowActivationFromProtocol(
++    WebContents* web_contents) {
++  return true;
++}
+ 
+ std::string DevToolsManagerDelegate::GetTargetType(WebContents* wc) {
+   return std::string();
+--- a/content/public/browser/devtools_manager_delegate.h
++++ b/content/public/browser/devtools_manager_delegate.h
+@@ -65,6 +65,12 @@
+   // Activates the associated inspector for `agent_host` if there
+   // is one.
+   virtual void Activate(DevToolsAgentHost* agent_host);
++
++  // Helium: whether a DevTools protocol client may bring `web_contents` to the
++  // front (Target.activateTarget and Page.bringToFront). When false the
++  // command succeeds but does nothing, so that a client cannot change the
++  // user's active tab or steal focus. Defaults to true.
++  virtual bool AllowActivationFromProtocol(WebContents* web_contents);
+ 
+   // Returns DevToolsAgentHost type to use for given |web_contents| target.
+   virtual std::string GetTargetType(WebContents* web_contents);
+--- /dev/null
++++ b/chrome/browser/ui/helium/helium_agent_tabs.cc
+@@ -0,0 +1,118 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#include "chrome/browser/ui/helium/helium_agent_tabs.h"
++
++#include <optional>
++#include <utility>
++#include <vector>
++
++#include "base/functional/callback_helpers.h"
++#include "chrome/browser/browser_process.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "chrome/common/pref_names.h"
++#include "components/prefs/pref_service.h"
++#include "components/tab_groups/tab_group_color.h"
++#include "components/tab_groups/tab_group_id.h"
++#include "components/tab_groups/tab_group_visual_data.h"
++#include "components/tabs/public/tab_interface.h"
++#include "content/public/browser/web_contents.h"
++#include "content/public/browser/web_contents_user_data.h"
++#include "ui/gfx/geometry/size.h"
++
++namespace helium::agent {
++
++namespace {
++
++// Attached to every agent tab. While it lives, the renderer is told that the
++// page is visible even when the tab is in the background, which keeps timers,
++// animation frames and screenshots working. It does not show a capture
++// indicator and does not count as user activity.
++class AgentTabState : public content::WebContentsUserData<AgentTabState> {
++ public:
++  ~AgentTabState() override = default;
++
++ private:
++  friend class content::WebContentsUserData<AgentTabState>;
++
++  explicit AgentTabState(content::WebContents* contents)
++      : content::WebContentsUserData<AgentTabState>(*contents),
++        keep_awake_(contents->IncrementCapturerCount(
++            gfx::Size(),
++            /*stay_hidden=*/false,
++            /*stay_awake=*/false,
++            /*is_activity=*/false)) {}
++
++  base::ScopedClosureRunner keep_awake_;
++
++  WEB_CONTENTS_USER_DATA_KEY_DECL();
++};
++
++WEB_CONTENTS_USER_DATA_KEY_IMPL(AgentTabState);
++
++// The group that already holds agent tabs in `model`, if any. Found through
++// its tabs so that it keeps working when the user renames or recolors it.
++std::optional<tab_groups::TabGroupId> FindAgentGroup(TabStripModel* model) {
++  for (int i = 0; i < model->count(); ++i) {
++    if (!AgentTabState::FromWebContents(model->GetWebContentsAt(i))) {
++      continue;
++    }
++    if (auto group = model->GetTabGroupForTab(i)) {
++      return group;
++    }
++  }
++  return std::nullopt;
++}
++
++}  // namespace
++
++bool IsAgentAccessEnabled() {
++  return g_browser_process && g_browser_process->local_state() &&
++         g_browser_process->local_state()->GetBoolean(
++             prefs::kHeliumAgentAccessEnabled);
++}
++
++bool IsAgentTab(content::WebContents* contents) {
++  return contents && AgentTabState::FromWebContents(contents);
++}
++
++void AdoptAgentTab(content::WebContents* contents) {
++  if (!contents) {
++    return;
++  }
++  AgentTabState::CreateForWebContents(contents);
++
++  tabs::TabInterface* tab = tabs::TabInterface::MaybeGetFromContents(contents);
++  BrowserWindowInterface* window =
++      tab ? tab->GetBrowserWindowInterface() : nullptr;
++  TabStripModel* model = window ? window->GetTabStripModel() : nullptr;
++  if (!model || !model->SupportsTabGroups()) {
++    return;
++  }
++  const int index = model->GetIndexOfWebContents(contents);
++  if (index == TabStripModel::kNoTab) {
++    return;
++  }
++
++  const std::optional<tab_groups::TabGroupId> agent_group =
++      FindAgentGroup(model);
++  if (agent_group) {
++    if (model->GetTabGroupForTab(index) != agent_group) {
++      model->AddToExistingGroup({index}, *agent_group, /*add_to_end=*/true);
++    }
++    return;
++  }
++
++  // Ephemeral: the group is not saved or synced, and is gone with its tabs.
++  const tab_groups::TabGroupId group =
++      model->AddToNewGroup({index}, /*is_ephemeral=*/true);
++  model->ChangeTabGroupVisuals(
++      group, tab_groups::TabGroupVisualData(
++                 u"Agent", tab_groups::TabGroupColorId::kPurple,
++                 /*is_collapsed=*/true));
++  model->MoveGroupTo(group, model->count() - 1);
++}
++
++}  // namespace helium::agent
+--- /dev/null
++++ b/chrome/browser/ui/helium/helium_agent_tabs.h
+@@ -0,0 +1,32 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_UI_HELIUM_HELIUM_AGENT_TABS_H_
++#define CHROME_BROWSER_UI_HELIUM_HELIUM_AGENT_TABS_H_
++
++namespace content {
++class WebContents;
++}
++
++// Tabs opened by AI agents and other DevTools protocol clients (see the "Let AI
++// agents control Helium" setting). They open in the background, in a collapsed
++// "Agent" tab group at the end of the tab strip, never take focus from the
++// user, and keep rendering at full speed while hidden, so that the agent can
++// use them while the user keeps working in the same window.
++namespace helium::agent {
++
++// True if the user turned on agent access in Settings.
++bool IsAgentAccessEnabled();
++
++// True if `contents` was opened by an agent.
++bool IsAgentTab(content::WebContents* contents);
++
++// Marks `contents`, which has just been added to a tab strip, as an agent tab:
++// moves it into the Agent group (creating the group if needed) and keeps its
++// renderer awake while the tab is hidden. Safe to call more than once.
++void AdoptAgentTab(content::WebContents* contents);
++
++}  // namespace helium::agent
++
++#endif  // CHROME_BROWSER_UI_HELIUM_HELIUM_AGENT_TABS_H_

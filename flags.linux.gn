@@ -14,3 +14,9 @@ use_sysroot=true
 use_vaapi=true
 use_system_libffi=false
 use_siso=true
+
+# Personal build for Intel Core Ultra (Arrow Lake): code generation for this
+# CPU, see patches/helium/linux/helium-target-march.patch. The result does not
+# run on older CPUs. Remove this line for a generic x86-64 build. PGO is
+# enabled separately, with scripts/build.sh --pgo.
+helium_target_march = "arrowlake"

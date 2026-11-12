@@ -68,6 +68,16 @@ The Linux patch is [`patches/helium/linux/wayland-frame-opacity.patch`](patches/
   window is declared opaque. The compositor then skips blending it, and can
   scan fullscreen video out directly. The transparency comes back on exit.
 
+- Lets AI agents and other automation control the browser without taking it
+  over, in
+  [`helium-agent-access.patch`](patches/helium/linux/helium-agent-access.patch),
+  with a toggle in **Settings → Behavior**. See [Let AI agents control
+  Helium](#let-ai-agents-control-helium).
+- Adds a build option to generate code for one CPU, in
+  [`helium-target-march.patch`](patches/helium/linux/helium-target-march.patch).
+  `flags.linux.gn` sets it to `arrowlake`. See [CPU target and
+  PGO](#cpu-target-and-pgo).
+
 The shared Helium [native materials patch](helium-chromium/patches/helium/ui/native-frame-materials.patch) contains the existing UI painting hooks. The Linux patches extend those hooks with Wayland compositing and website transparency.
 
 ## Build
@@ -106,7 +116,28 @@ python3 scripts/check-frame-opacity-patch.py --patch helium/linux/wayland-web-co
 python3 scripts/check-frame-opacity-patch.py --patch helium/linux/wayland-web-content-lifecycle.patch
 python3 scripts/check-frame-opacity-patch.py --patch helium/linux/wayland-settings.patch
 python3 scripts/check-frame-opacity-patch.py --patch helium/linux/wayland-swipe-page-preview.patch
+python3 scripts/check-frame-opacity-patch.py --patch helium/linux/linux-battery-energy-saver.patch
+python3 scripts/check-frame-opacity-patch.py --patch helium/linux/wayland-fullscreen-opaque.patch
+python3 scripts/check-frame-opacity-patch.py --patch helium/linux/helium-agent-access.patch
+python3 scripts/check-frame-opacity-patch.py --patch helium/linux/helium-target-march.patch
 ```
+
+To turn edits made in `build/src` into a patch against the pinned upstream
+files, use `scripts/generate-patch-from-build.py`. It ignores the domain
+substitution that the build tree has applied.
+
+### CPU target and PGO
+
+`flags.linux.gn` sets `helium_target_march = "arrowlake"`, so the compiler and
+the ThinLTO link generate code for Intel Core Ultra (Arrow Lake: AVX2,
+AVX-VNNI, BMI2, GFNI, SHA). The browser then **does not run on older CPUs**.
+Remove the line, or set another `-march` name, for a different machine.
+
+Profile-guided optimization is off by default. Build with
+`scripts/build.sh --pgo` to use the profile that matches the pinned Chromium.
+Full builds with PGO, ThinLTO and a CPU target need a lot of memory: with 15 GB
+of RAM, give the build container a memory cap and enough swap, so that a spike
+kills the build and not your session.
 
 ## Settings
 
@@ -135,6 +166,44 @@ Leave a flag on **Default** to use the Settings value. If an opacity flag was
 previously enabled in `helium://flags`, reset it to Default so the Settings slider
 can take effect. Flags and switches are read at startup.
 
+
+## Let AI agents control Helium
+
+**Settings → Behavior → Let AI agents control Helium** keeps Chromium's remote
+debugging server (the DevTools protocol, CDP) running on `127.0.0.1:9222`, with
+no per-connection approval prompt. Agents and tools that speak CDP, such as
+chrome-devtools-mcp, Playwright, Puppeteer and plain scripts, connect to your
+running browser at that fixed address. The setting is off by default, and
+applies to the whole browser, not one profile.
+
+```sh
+curl http://127.0.0.1:9222/json/version      # the endpoint
+chrome-devtools-mcp --browserUrl http://127.0.0.1:9222
+```
+
+An agent can work in your own window while you keep using it:
+
+- **Its tabs stay in the background.** `Target.createTarget`, `/json/new`,
+  `window.open` and links with `target="_blank"` from an agent's page all open
+  as background tabs in your current window, whatever the client asks for
+  (`focus`, `background: false` and `newWindow` are overridden).
+- **They are grouped.** Agent tabs go into a collapsed, purple **Agent** tab
+  group at the end of the tab strip. The group is not saved or synced, and goes
+  away with its tabs. Expand it to watch.
+- **It can't change what you see.** `Target.activateTarget` and
+  `Page.bringToFront` succeed but do nothing, and a page in an agent tab cannot
+  activate itself. Your active tab stays your active tab.
+- **Its tabs keep running at full speed while hidden.** Their pages report
+  `visibilityState: "visible"`, and timers, animation frames and screenshots
+  work, so scripts don't stall.
+- **It can see everything.** Clients can still list, attach to and control all
+  your tabs, and use your signed-in sessions. Tabs the agent creates are what is
+  kept out of your way, not what it can reach.
+
+Anything running as your user can connect while the setting is on. Leave it off
+unless you use agents. `--remote-debugging-port` and `--remote-debugging-pipe`
+work as before, and Chromium's own approval mode under `chrome://inspect` is
+used when this setting is off.
 
 ## Energy saver on Linux
 
