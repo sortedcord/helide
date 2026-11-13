@@ -118,12 +118,12 @@ async function connectCdp(port) {
 }
 
 // ---- the browser -----------------------------------------------------------
-async function launchBrowser(runtimeDir, socket, { scrubEnabled = true } = {}) {
+async function launchBrowser(runtimeDir, socket, { scrubEnabled = true, scrubInvert = false } = {}) {
   const profile = mkdtempSync(join(tmpdir(), 'helide-scrub-profile-'));
   mkdirSync(join(profile, 'Default'));
   // The vertical tab layout, where a vertical swipe follows the tab list.
   writeFileSync(join(profile, 'Default/Preferences'), JSON.stringify({
-    helium: { browser: { layout: 2, three_finger_tab_scrub: scrubEnabled } },
+    helium: { browser: { layout: 2, three_finger_tab_scrub: scrubEnabled, three_finger_tab_scrub_invert: scrubInvert } },
   }));
   const child = spawn(browserPath, [
     '--ozone-platform=wayland', '--disable-gpu', `--user-data-dir=${profile}`,
@@ -343,6 +343,22 @@ await session({ scrubEnabled: false }, async ({ compositor, cdp }) => {
     const tab = await activeTab(cdp);
     assert.equal(tab.title, 'Tab 2');
     assert.equal(tab.scrollY, 0);
+  });
+});
+
+await session({ scrubInvert: true }, async ({ compositor, cdp }) => {
+  await openTabs(cdp, 9);
+  await test('inverted: swiping down moves back, swiping up moves forward', async () => {
+    await activate(cdp, 'Tab 5');
+    // 80 DIPs at 37 DIPs per tab is 2.2 tabs.
+    await compositor.swipe(3, run(80, 20));
+    await compositor.end();
+    await sleep(600);
+    assert.equal((await activeTab(cdp)).title, 'Tab 3');
+    await compositor.swipe(3, run(-80, 20));
+    await compositor.end();
+    await sleep(600);
+    assert.equal((await activeTab(cdp)).title, 'Tab 5');
   });
 });
 

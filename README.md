@@ -421,7 +421,7 @@ This is the Linux version of ChromeOS tab scrubbing, extended to two axes and ma
 - A resting hand does not start anything: the swipe only chooses vertical or horizontal after about 12 DIPs of movement, and then stays on that axis. The more tabs you have, the more finger travel each tab needs (28 DIPs per tab, up to 64).
 - A three-finger swipe never scrolls a web page, whether the feature is on or off.
 
-It is on by default and can be turned off in **Settings → Behavior → Switch tabs with three-finger swipes** (Wayland only). It is designed for the vertical tab layout, where the finger follows the tab list. With the horizontal layout, a vertical swipe still moves the glow along the strip.
+It is on by default and can be turned off in **Settings → Behavior → Switch tabs with three-finger swipes** (Wayland only). **Invert three-finger tab swipe direction** in the same place reverses the vertical swipe, so swiping down moves the glow up the tab list, like natural scrolling. It does not change the sideways swipe between split view panes. It is designed for the vertical tab layout, where the finger follows the tab list. With the horizontal layout, a vertical swipe still moves the glow along the strip.
 
 ### What the compositor has to do
 
@@ -448,7 +448,7 @@ node scripts/test-three-finger-tab-scrub.mjs   # needs a built tree, libwayland 
 scripts/test-tab-scrub-model.sh                # the scrubbing math on its own
 ```
 
-The end-to-end test covers vertical scrubbing, the continuous glow, commit on lift, the ends of the strip, cancelled and tiny swipes, two-finger swipes being left to the page, and the setting being off. It does not cover split view panes: those need a real split view, which the test cannot create yet.
+The end-to-end test covers vertical scrubbing, the continuous glow, commit on lift, the ends of the strip, cancelled and tiny swipes, two-finger swipes being left to the page, the setting being off, and the inverted direction. It does not cover split view panes: those need a real split view, which the test cannot create yet.
 
 ## Set the opacity
 

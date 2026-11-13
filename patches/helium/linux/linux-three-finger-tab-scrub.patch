@@ -8,18 +8,20 @@
  #include "chrome/common/pref_names.h"
  #include "components/autofill/core/common/autofill_prefs.h"
  #include "components/bookmarks/common/bookmark_pref_names.h"
-@@ -243,6 +244,8 @@
+@@ -243,6 +244,10 @@
        settings_api::PrefType::kBoolean;
    (*s_allowlist)[::prefs::kHeliumWaylandSwipePagePreview] =
        settings_api::PrefType::kBoolean;
 +  (*s_allowlist)[::helium::kThreeFingerTabScrub] =
++      settings_api::PrefType::kBoolean;
++  (*s_allowlist)[::helium::kThreeFingerTabScrubInvert] =
 +      settings_api::PrefType::kBoolean;
    (*s_allowlist)[::prefs::kHeliumAgentAccessEnabled] =
        settings_api::PrefType::kBoolean;
  
 --- a/chrome/browser/resources/settings/appearance_page/appearance_behavior_page.html
 +++ b/chrome/browser/resources/settings/appearance_page/appearance_behavior_page.html
-@@ -48,6 +48,12 @@
+@@ -48,6 +48,18 @@
          label="$i18n{waylandSwipePagePreview}"
          sub-label="$i18n{waylandSwipePagePreviewDescription}">
      </settings-toggle-button>
@@ -28,6 +30,12 @@
 +        pref-key="helium.browser.three_finger_tab_scrub"
 +        label="$i18n{threeFingerTabScrub}"
 +        sub-label="$i18n{threeFingerTabScrubDescription}">
++    </settings-toggle-button>
++
++    <settings-toggle-button class="hr" id="threeFingerTabScrubInvert"
++        pref-key="helium.browser.three_finger_tab_scrub_invert"
++        label="$i18n{threeFingerTabScrubInvert}"
++        sub-label="$i18n{threeFingerTabScrubInvertDescription}">
 +    </settings-toggle-button>
    </template>
  
@@ -42,11 +50,12 @@
  #include "chrome/common/helium_window_controls_prefs.h"
  #include "chrome/common/pref_names.h"
  #include "components/helium_services/pref_names.h"
-@@ -175,6 +176,7 @@
+@@ -175,6 +176,8 @@
    registry->RegisterBooleanPref(prefs::kShowExtensionsButton, true);
    registry->RegisterBooleanPref(prefs::kShowMenuButton, true);
    registry->RegisterBooleanPref(helium::kShowWindowCloseButton, true);
 +  registry->RegisterBooleanPref(helium::kThreeFingerTabScrub, true);
++  registry->RegisterBooleanPref(helium::kThreeFingerTabScrubInvert, false);
    registry->RegisterBooleanPref(prefs::kShowMediaButton, true);
    registry->RegisterBooleanPref(prefs::kShowVerticalTabsCollapseButton, true);
    registry->RegisterBooleanPref(prefs::kShowDynamicNewTabButton, true);
@@ -127,7 +136,7 @@
        window_button_order_observation_{this};
 --- a/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
 +++ b/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
-@@ -717,6 +717,15 @@
+@@ -717,6 +717,21 @@
        {"themeManagedDialogBody", IDS_NTP_THEME_MANAGED_DIALOG_BODY},
    };
    html_source->AddLocalizedStrings(kLocalizedStrings);
@@ -140,6 +149,12 @@
 +      "threeFingerTabScrubDescription",
 +      u"Swipe up or down with three fingers to glow over tabs and release to "
 +      u"switch. Swipe left or right to move between split view panes.");
++  html_source->AddString("threeFingerTabScrubInvert",
++                         u"Invert three-finger tab swipe direction");
++  html_source->AddString(
++      "threeFingerTabScrubInvertDescription",
++      u"Swipe down to move the glow up the tab list, and up to move it down, "
++      u"like natural scrolling. Split view panes are not affected.");
  
    html_source->AddBoolean("ntpSimplificationBookmarksBarEnabled",
                            base::FeatureList::IsEnabled(
@@ -730,7 +745,7 @@
 +#endif  // CHROME_BROWSER_UI_VIEWS_HELIUM_HELIUM_TAB_SCRUB_MODEL_H_
 --- /dev/null
 +++ b/chrome/browser/ui/views/helium/helium_tab_scrubber.cc
-@@ -0,0 +1,521 @@
+@@ -0,0 +1,532 @@
 +// Copyright 2026 The Helide Authors
 +// Use of this source code is governed by the GPL-3.0 license in LICENSE.
 +
@@ -873,6 +888,10 @@
 +             helium::kThreeFingerTabScrub);
 +}
 +
++double TabScrubber::VerticalDelta(double dy) const {
++  return invert_vertical_ ? -dy : dy;
++}
++
 +void TabScrubber::OnMotion(double dx, double dy) {
 +  switch (state_) {
 +    case State::kIdle:
@@ -880,6 +899,11 @@
 +        state_ = State::kIgnored;
 +        return;
 +      }
++      invert_vertical_ = browser_view_.view() &&
++                         static_cast<BrowserView*>(browser_view_.view())
++                             ->GetProfile()
++                             ->GetPrefs()
++                             ->GetBoolean(helium::kThreeFingerTabScrubInvert);
 +      axis_lock_ = SwipeAxisLock();
 +      axis_ = SwipeAxisLock::Axis::kUndecided;
 +      state_ = State::kUndecided;
@@ -892,7 +916,8 @@
 +      return;
 +    }
 +    case State::kScrubbing: {
-+      position_->Move(axis_ == SwipeAxisLock::Axis::kHorizontal ? dx : dy);
++      position_->Move(axis_ == SwipeAxisLock::Axis::kHorizontal ? dx
++                                                                  : VerticalDelta(dy));
 +      if (!Refresh()) {
 +        // The tabs changed under the swipe. Stop following it, and do not
 +        // switch to anything when the fingers lift.
@@ -937,7 +962,8 @@
 +      .SetDuration(kFadeInDuration)
 +      .SetOpacity(added->layer(), 1.0f, gfx::Tween::EASE_OUT);
 +
-+  position_->Move(carry);
++  position_->Move(axis == SwipeAxisLock::Axis::kVertical ? VerticalDelta(carry)
++                                                          : carry);
 +  state_ = State::kScrubbing;
 +  if (!Refresh()) {
 +    RemoveOverlay();
@@ -1254,7 +1280,7 @@
 +}  // namespace helium
 --- /dev/null
 +++ b/chrome/browser/ui/views/helium/helium_tab_scrubber.h
-@@ -0,0 +1,133 @@
+@@ -0,0 +1,137 @@
 +// Copyright 2026 The Helide Authors
 +// Use of this source code is governed by the GPL-3.0 license in LICENSE.
 +
@@ -1343,6 +1369,7 @@
 +  };
 +
 +  bool IsEnabled();
++  double VerticalDelta(double dy) const;
 +  void OnMotion(double dx, double dy);
 +  void StartScrubbing(SwipeAxisLock::Axis axis, double carry);
 +  bool StartTabScrub();
@@ -1371,6 +1398,9 @@
 +  SwipeAxisLock axis_lock_;
 +  SwipeAxisLock::Axis axis_ = SwipeAxisLock::Axis::kUndecided;
 +  std::optional<ScrubPosition> position_;
++  // Whether the vertical axis is reversed for the swipe in progress. Read when
++  // the fingers land, so changing the setting never affects a swipe mid-way.
++  bool invert_vertical_ = false;
 +
 +  // The tab that was active when the swipe started, to notice changes under
 +  // the swipe.
@@ -1390,7 +1420,7 @@
 +#endif  // CHROME_BROWSER_UI_VIEWS_HELIUM_HELIUM_TAB_SCRUBBER_H_
 --- /dev/null
 +++ b/chrome/common/helium_tab_scrub_prefs.h
-@@ -0,0 +1,16 @@
+@@ -0,0 +1,21 @@
 +// Copyright 2026 The Helide Authors
 +// Use of this source code is governed by the GPL-3.0 license in LICENSE.
 +
@@ -1403,6 +1433,11 @@
 +// swipe move through tabs (vertical) and split view panes (horizontal).
 +inline constexpr char kThreeFingerTabScrub[] =
 +    "helium.browser.three_finger_tab_scrub";
++
++// Linux only. A boolean pref, off by default, that reverses the vertical
++// swipe: swiping down moves the glow up the tab list instead of down it.
++inline constexpr char kThreeFingerTabScrubInvert[] =
++    "helium.browser.three_finger_tab_scrub_invert";
 +
 +}  // namespace helium
 +
