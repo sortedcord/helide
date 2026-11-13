@@ -1,0 +1,1409 @@
+--- a/chrome/browser/extensions/api/settings_private/prefs_util.cc
++++ b/chrome/browser/extensions/api/settings_private/prefs_util.cc
+@@ -36,6 +36,7 @@
+ #include "chrome/browser/ui/tabs/tab_strip_prefs.h"
+ #include "chrome/browser/ui/toolbar/toolbar_pref_names.h"
+ #include "chrome/common/extensions/api/settings_private.h"
++#include "chrome/common/helium_tab_scrub_prefs.h"
+ #include "chrome/common/pref_names.h"
+ #include "components/autofill/core/common/autofill_prefs.h"
+ #include "components/bookmarks/common/bookmark_pref_names.h"
+@@ -243,6 +244,8 @@
+       settings_api::PrefType::kBoolean;
+   (*s_allowlist)[::prefs::kHeliumWaylandSwipePagePreview] =
+       settings_api::PrefType::kBoolean;
++  (*s_allowlist)[::helium::kThreeFingerTabScrub] =
++      settings_api::PrefType::kBoolean;
+   (*s_allowlist)[::prefs::kHeliumAgentAccessEnabled] =
+       settings_api::PrefType::kBoolean;
+ 
+--- a/chrome/browser/resources/settings/appearance_page/appearance_behavior_page.html
++++ b/chrome/browser/resources/settings/appearance_page/appearance_behavior_page.html
+@@ -48,6 +48,12 @@
+         label="$i18n{waylandSwipePagePreview}"
+         sub-label="$i18n{waylandSwipePagePreviewDescription}">
+     </settings-toggle-button>
++
++    <settings-toggle-button class="hr" id="threeFingerTabScrub"
++        pref-key="helium.browser.three_finger_tab_scrub"
++        label="$i18n{threeFingerTabScrub}"
++        sub-label="$i18n{threeFingerTabScrubDescription}">
++    </settings-toggle-button>
+   </template>
+ 
+ </settings-section>
+--- a/chrome/browser/ui/browser_ui_prefs.cc
++++ b/chrome/browser/ui/browser_ui_prefs.cc
+@@ -14,6 +14,7 @@
+ #include "chrome/browser/ui/ui_features.h"
+ #include "chrome/browser/upgrade_detector/upgrade_detector.h"
+ #include "chrome/common/buildflags.h"
++#include "chrome/common/helium_tab_scrub_prefs.h"
+ #include "chrome/common/helium_window_controls_prefs.h"
+ #include "chrome/common/pref_names.h"
+ #include "components/helium_services/pref_names.h"
+@@ -175,6 +176,7 @@
+   registry->RegisterBooleanPref(prefs::kShowExtensionsButton, true);
+   registry->RegisterBooleanPref(prefs::kShowMenuButton, true);
+   registry->RegisterBooleanPref(helium::kShowWindowCloseButton, true);
++  registry->RegisterBooleanPref(helium::kThreeFingerTabScrub, true);
+   registry->RegisterBooleanPref(prefs::kShowMediaButton, true);
+   registry->RegisterBooleanPref(prefs::kShowVerticalTabsCollapseButton, true);
+   registry->RegisterBooleanPref(prefs::kShowDynamicNewTabButton, true);
+--- a/chrome/browser/ui/views/frame/BUILD.gn
++++ b/chrome/browser/ui/views/frame/BUILD.gn
+@@ -2085,6 +2085,7 @@
+       "//chrome/browser/ui/browser_window",
+       "//chrome/browser/ui/views:layout_provider",
+       "//chrome/browser/ui/views/frame:browser_view_header",
++      "//chrome/browser/ui/views/helium:tab_scrub",
+       "//chrome/common:constants",
+       "//components/prefs",
+       "//ui/base",
+--- a/chrome/browser/ui/views/frame/browser_frame_view_linux.cc
++++ b/chrome/browser/ui/views/frame/browser_frame_view_linux.cc
+@@ -14,6 +14,7 @@
+ #include "chrome/browser/ui/views/chrome_layout_provider.h"
+ #include "chrome/browser/ui/views/frame/browser_native_widget_aura_linux.h"
+ #include "chrome/browser/ui/views/frame/browser_view.h"
++#include "chrome/browser/ui/views/helium/helium_tab_scrubber.h"
+ #include "chrome/browser/ui/views/helium/native_frame_materials.h"
+ #include "chrome/common/helium_window_controls_prefs.h"
+ #include "components/prefs/pref_change_registrar.h"
+@@ -78,6 +79,21 @@
+ }
+ 
+ BrowserFrameViewLinux::~BrowserFrameViewLinux() = default;
++
++void BrowserFrameViewLinux::AddedToWidget() {
++  OpaqueBrowserFrameView::AddedToWidget();
++  // Three-finger tab scrubbing, for ordinary tabbed windows only.
++  if (GetBrowserView()->browser()->GetType() ==
++      BrowserWindowInterface::TYPE_NORMAL) {
++    tab_scrubber_ =
++        std::make_unique<helium::TabScrubber>(GetBrowserView(), GetWidget());
++  }
++}
++
++void BrowserFrameViewLinux::RemovedFromWidget() {
++  tab_scrubber_.reset();
++  OpaqueBrowserFrameView::RemovedFromWidget();
++}
+ 
+ gfx::Insets BrowserFrameViewLinux::RestoredMirroredFrameBorderInsets() const {
+   return layout_->RestoredMirroredFrameBorderInsets();
+--- a/chrome/browser/ui/views/frame/browser_frame_view_linux.h
++++ b/chrome/browser/ui/views/frame/browser_frame_view_linux.h
+@@ -14,6 +14,10 @@
+ #include "ui/linux/window_button_order_observer.h"
+ 
+ class PrefChangeRegistrar;
++
++namespace helium {
++class TabScrubber;
++}  // namespace helium
+ 
+ namespace ui {
+ class LinuxUi;
+@@ -65,6 +69,10 @@
+   // views::FrameView:
+   int NonClientHitTest(const gfx::Point& point) override;
+ 
++  // views::View:
++  void AddedToWidget() override;
++  void RemovedFromWidget() override;
++
+   // Gets the radius of the top corners when the window is restored.  The
+   // returned value is in DIPs.  The result will be 0 if rounded corners are
+   // disabled (eg. if the compositor doesn't support translucency.)
+@@ -73,6 +81,8 @@
+  private:
+   const raw_ptr<BrowserFrameViewLayoutLinux> layout_;
+   std::unique_ptr<PrefChangeRegistrar> window_controls_pref_registrar_;
++  // Three-finger tab scrubbing for this window.
++  std::unique_ptr<helium::TabScrubber> tab_scrubber_;
+ 
+   base::ScopedObservation<ui::LinuxUi, ui::WindowButtonOrderObserver>
+       window_button_order_observation_{this};
+--- a/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
++++ b/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
+@@ -717,6 +717,15 @@
+       {"themeManagedDialogBody", IDS_NTP_THEME_MANAGED_DIALOG_BODY},
+   };
+   html_source->AddLocalizedStrings(kLocalizedStrings);
++
++  // Helide: plain strings, not grit messages, so adding them does not change
++  // the generated resource headers that most of the browser includes.
++  html_source->AddString("threeFingerTabScrub",
++                         u"Switch tabs with three-finger swipes");
++  html_source->AddString(
++      "threeFingerTabScrubDescription",
++      u"Swipe up or down with three fingers to glow over tabs and release to "
++      u"switch. Swipe left or right to move between split view panes.");
+ 
+   html_source->AddBoolean("ntpSimplificationBookmarksBarEnabled",
+                           base::FeatureList::IsEnabled(
+--- a/chrome/common/BUILD.gn
++++ b/chrome/common/BUILD.gn
+@@ -567,6 +567,7 @@
+     "chrome_paths.h",
+     "chrome_paths_internal.h",
+     "chrome_result_codes.h",
++    "helium_tab_scrub_prefs.h",
+     "helium_window_controls_prefs.h",
+     "pref_font_script_names-inl.h",
+     "pref_font_webkit_names.h",
+--- a/ui/ozone/platform/wayland/host/wayland_event_source.cc
++++ b/ui/ozone/platform/wayland/host/wayland_event_source.cc
+@@ -928,6 +928,51 @@
+   }
+ 
+   SetTargetAndDispatchEvent(&event, target);
++}
++
++// Helide: three-or-more-finger touchpad swipes. They are delivered the way
++// ChromeOS delivers them to its tab scrubber: as scroll events that carry the
++// finger count. A kScroll event is one frame of finger motion; the session
++// ends with kScrollFlingStart (fingers lifted) or kScrollFlingCancel (the
++// compositor cancelled it). Two-finger scrolling keeps its own path above.
++void WaylandEventSource::OnSwipeEvent(SwipePhase phase,
++                                      uint32_t finger_count,
++                                      const gfx::Vector2dF& delta,
++                                      base::TimeTicks timestamp,
++                                      int device_id) {
++  if (finger_count < 3 || phase == SwipePhase::kBegin) {
++    return;
++  }
++
++  auto* target = window_manager_->GetCurrentPointerFocusedWindow();
++  if (!target) {
++    return;
++  }
++
++  const int flags = pointer_flags_ | keyboard_modifiers_;
++  const int fingers = static_cast<int>(finger_count);
++  std::unique_ptr<ScrollEvent> event;
++  switch (phase) {
++    case SwipePhase::kUpdate:
++      event = std::make_unique<ScrollEvent>(
++          EventType::kScroll, pointer_location_, pointer_location_, timestamp,
++          flags, delta.x(), delta.y(), delta.x(), delta.y(), fingers);
++      break;
++    case SwipePhase::kEnd:
++      event = std::make_unique<ScrollEvent>(
++          EventType::kScrollFlingStart, pointer_location_, pointer_location_,
++          timestamp, flags, 0, 0, 0, 0, fingers);
++      break;
++    case SwipePhase::kCancel:
++      event = std::make_unique<ScrollEvent>(
++          EventType::kScrollFlingCancel, pointer_location_, pointer_location_,
++          timestamp, flags, 0, 0, 0, 0, fingers);
++      break;
++    case SwipePhase::kBegin:
++      return;
++  }
++  event->set_source_device_id(device_id);
++  SetTargetAndDispatchEvent(event.get(), target);
+ }
+ 
+ void WaylandEventSource::OnHoldEvent(EventType event_type,
+--- a/ui/ozone/platform/wayland/host/wayland_event_source.h
++++ b/ui/ozone/platform/wayland/host/wayland_event_source.h
+@@ -183,6 +183,11 @@
+                    base::TimeTicks timestamp,
+                    int device_id,
+                    wl::EventDispatchPolicy dispatch_policy) override;
++  void OnSwipeEvent(SwipePhase phase,
++                    uint32_t finger_count,
++                    const gfx::Vector2dF& delta,
++                    base::TimeTicks timestamp,
++                    int device_id) override;
+ 
+   // WaylandZwpRelativePointerManager::Delegate:
+   void SetRelativePointerMotionEnabled(bool enabled) override;
+--- a/ui/ozone/platform/wayland/host/wayland_zwp_pointer_gestures.cc
++++ b/ui/ozone/platform/wayland/host/wayland_zwp_pointer_gestures.cc
+@@ -62,7 +62,11 @@
+   DCHECK(delegate_);
+ }
+ 
+-WaylandZwpPointerGestures::~WaylandZwpPointerGestures() = default;
++WaylandZwpPointerGestures::~WaylandZwpPointerGestures() {
++  if (swipe_) {
++    zwp_pointer_gesture_swipe_v1_destroy(swipe_.ExtractAsDangling());
++  }
++}
+ 
+ void WaylandZwpPointerGestures::Init() {
+   DCHECK(connection_->seat());
+@@ -78,6 +82,19 @@
+   zwp_pointer_gesture_pinch_v1_add_listener(pinch_.get(), &kPinchListener,
+                                             this);
+ 
++  // Helide: swipe sessions, which carry the finger count and a continuous
++  // stream of relative motion. Chromium previously ignored them.
++  if (swipe_) {
++    zwp_pointer_gesture_swipe_v1_destroy(swipe_.ExtractAsDangling());
++  }
++  swipe_ = zwp_pointer_gestures_v1_get_swipe_gesture(obj_.get(), pointer);
++  static constexpr zwp_pointer_gesture_swipe_v1_listener kSwipeListener = {
++      .begin = &OnSwipeBegin,
++      .update = &OnSwipeUpdate,
++      .end = &OnSwipeEnd,
++  };
++  zwp_pointer_gesture_swipe_v1_add_listener(swipe_, &kSwipeListener, this);
++
+ #if defined(ZWP_POINTER_GESTURES_V1_GET_HOLD_GESTURE_SINCE_VERSION)
+   if (zwp_pointer_gestures_v1_get_version(obj_.get()) <
+       ZWP_POINTER_GESTURES_V1_GET_HOLD_GESTURE_SINCE_VERSION) {
+@@ -148,6 +165,54 @@
+       wl::EventMillisecondsToTimeTicks(time), self->obj_.id());
+ }
+ 
++// static
++void WaylandZwpPointerGestures::OnSwipeBegin(
++    void* data,
++    struct zwp_pointer_gesture_swipe_v1* zwp_pointer_gesture_swipe_v1,
++    uint32_t serial,
++    uint32_t time,
++    struct wl_surface* surface,
++    uint32_t fingers) {
++  auto* self = static_cast<WaylandZwpPointerGestures*>(data);
++  self->swipe_fingers_ = fingers;
++  self->delegate_->OnSwipeEvent(Delegate::SwipePhase::kBegin, fingers,
++                                gfx::Vector2dF(),
++                                wl::EventMillisecondsToTimeTicks(time),
++                                self->obj_.id());
++}
++
++// static
++void WaylandZwpPointerGestures::OnSwipeUpdate(
++    void* data,
++    struct zwp_pointer_gesture_swipe_v1* zwp_pointer_gesture_swipe_v1,
++    uint32_t time,
++    wl_fixed_t dx,
++    wl_fixed_t dy) {
++  auto* self = static_cast<WaylandZwpPointerGestures*>(data);
++  const gfx::Vector2dF delta = {static_cast<float>(wl_fixed_to_double(dx)),
++                                static_cast<float>(wl_fixed_to_double(dy))};
++  self->delegate_->OnSwipeEvent(Delegate::SwipePhase::kUpdate,
++                                self->swipe_fingers_, delta,
++                                wl::EventMillisecondsToTimeTicks(time),
++                                self->obj_.id());
++}
++
++// static
++void WaylandZwpPointerGestures::OnSwipeEnd(
++    void* data,
++    struct zwp_pointer_gesture_swipe_v1* zwp_pointer_gesture_swipe_v1,
++    uint32_t serial,
++    uint32_t time,
++    int32_t cancelled) {
++  auto* self = static_cast<WaylandZwpPointerGestures*>(data);
++  const uint32_t fingers = self->swipe_fingers_;
++  self->swipe_fingers_ = 0;
++  self->delegate_->OnSwipeEvent(
++      cancelled ? Delegate::SwipePhase::kCancel : Delegate::SwipePhase::kEnd,
++      fingers, gfx::Vector2dF(), wl::EventMillisecondsToTimeTicks(time),
++      self->obj_.id());
++}
++
+ #if defined(ZWP_POINTER_GESTURE_HOLD_V1_BEGIN_SINCE_VERSION)
+ // static
+ void WaylandZwpPointerGestures::OnHoldBegin(
+--- a/ui/ozone/platform/wayland/host/wayland_zwp_pointer_gestures.h
++++ b/ui/ozone/platform/wayland/host/wayland_zwp_pointer_gestures.h
+@@ -73,6 +73,27 @@
+       uint32_t time,
+       int32_t cancelled);
+ 
++  // zwp_pointer_gesture_swipe_v1_listener callbacks:
++  static void OnSwipeBegin(
++      void* data,
++      struct zwp_pointer_gesture_swipe_v1* zwp_pointer_gesture_swipe_v1,
++      uint32_t serial,
++      uint32_t time,
++      struct wl_surface* surface,
++      uint32_t fingers);
++  static void OnSwipeUpdate(
++      void* data,
++      struct zwp_pointer_gesture_swipe_v1* zwp_pointer_gesture_swipe_v1,
++      uint32_t time,
++      wl_fixed_t dx,
++      wl_fixed_t dy);
++  static void OnSwipeEnd(
++      void* data,
++      struct zwp_pointer_gesture_swipe_v1* zwp_pointer_gesture_swipe_v1,
++      uint32_t serial,
++      uint32_t time,
++      int32_t cancelled);
++
+   // zwp_pointer_gesture_hold_v1_listener callbacks:
+ #if defined(ZWP_POINTER_GESTURE_HOLD_V1_BEGIN_SINCE_VERSION)
+   static void OnHoldBegin(
+@@ -94,6 +115,9 @@
+ 
+   wl::Object<zwp_pointer_gestures_v1> obj_;
+   wl::Object<zwp_pointer_gesture_pinch_v1> pinch_;
++  // Owned manually so the shared wayland_object.h traits need no change.
++  raw_ptr<zwp_pointer_gesture_swipe_v1> swipe_ = nullptr;
++  uint32_t swipe_fingers_ = 0;
+ #if defined(ZWP_POINTER_GESTURES_V1_GET_HOLD_GESTURE_SINCE_VERSION)
+   wl::Object<zwp_pointer_gesture_hold_v1> hold_;
+ #endif
+@@ -122,6 +146,17 @@
+                            base::TimeTicks timestamp,
+                            int device_id,
+                            wl::EventDispatchPolicy dispatch_policy) = 0;
++
++  // Helide: handles a touchpad swipe session (zwp_pointer_gesture_swipe_v1).
++  // |delta| is empty on kBegin, kEnd and kCancel; on kUpdate it is the motion
++  // of the finger cluster since the previous event. |finger_count| is the
++  // number of fingers the compositor reported at the start of the session.
++  enum class SwipePhase { kBegin, kUpdate, kEnd, kCancel };
++  virtual void OnSwipeEvent(SwipePhase phase,
++                            uint32_t finger_count,
++                            const gfx::Vector2dF& delta,
++                            base::TimeTicks timestamp,
++                            int device_id) {}
+ };
+ 
+ }  // namespace ui
+--- /dev/null
++++ b/chrome/browser/ui/views/helium/BUILD.gn
+@@ -0,0 +1,42 @@
++# Copyright 2026 The Helide Authors
++# Use of this source code is governed by the GPL-3.0 license in LICENSE.
++
++assert(is_linux)
++
++# Three-finger tab scrubbing: a vertical swipe moves through the tab strip, a
++# horizontal swipe moves between split view panes, with a glow that follows
++# the fingers.
++source_set("tab_scrub") {
++  sources = [
++    "helium_tab_scrub_glow_view.cc",
++    "helium_tab_scrub_glow_view.h",
++    "helium_tab_scrub_model.cc",
++    "helium_tab_scrub_model.h",
++    "helium_tab_scrubber.cc",
++    "helium_tab_scrubber.h",
++  ]
++  public_deps = [
++    "//base",
++    "//ui/aura",
++    "//ui/events",
++    "//ui/views",
++  ]
++  deps = [
++    "//chrome/browser/profiles:profile",
++    "//chrome/browser/ui/browser_window",
++    "//chrome/browser/ui/tabs",
++    "//chrome/browser/ui/views/frame:browser_view_header",
++    "//chrome/browser/ui/views/frame:contents_container_view",
++    "//chrome/browser/ui/views/frame:contents_web_view",
++    "//chrome/browser/ui/views/frame:multi_contents_view",
++    "//chrome/browser/ui/views/tabs:tab",
++    "//chrome/browser/ui/views/tabs/common",
++    "//chrome/common:constants",
++    "//components/prefs",
++    "//components/tabs:public",
++    "//content/public/browser",
++    "//skia",
++    "//ui/color",
++    "//ui/gfx",
++  ]
++}
+--- /dev/null
++++ b/chrome/browser/ui/views/helium/helium_tab_scrub_glow_view.cc
+@@ -0,0 +1,101 @@
++// Copyright 2026 The Helide Authors
++// Use of this source code is governed by the GPL-3.0 license in LICENSE.
++
++#include "chrome/browser/ui/views/helium/helium_tab_scrub_glow_view.h"
++
++#include <utility>
++
++#include "cc/paint/paint_flags.h"
++#include "third_party/skia/include/core/SkClipOp.h"
++#include "third_party/skia/include/core/SkColor.h"
++#include "third_party/skia/include/core/SkRRect.h"
++#include "ui/base/metadata/metadata_impl_macros.h"
++#include "ui/color/color_id.h"
++#include "ui/color/color_provider.h"
++#include "ui/compositor/layer.h"
++#include "ui/gfx/canvas.h"
++#include "ui/gfx/geometry/insets_f.h"
++#include "ui/gfx/geometry/skia_conversions.h"
++#include "ui/gfx/geometry/vector2d.h"
++#include "ui/gfx/scoped_canvas.h"
++#include "ui/gfx/shadow_value.h"
++#include "ui/gfx/skia_paint_util.h"
++
++namespace helium {
++
++namespace {
++
++// Blur radius of the halo, in DIPs.
++constexpr int kHaloBlur = 24;
++constexpr float kOutlineWidth = 1.5f;
++
++}  // namespace
++
++TabScrubGlowView::TabScrubGlowView() {
++  // The overlay only draws; the swipe is handled elsewhere.
++  SetCanProcessEventsWithinSubtree(false);
++  SetPaintToLayer();
++  layer()->SetFillsBoundsOpaquely(false);
++}
++
++TabScrubGlowView::~TabScrubGlowView() = default;
++
++void TabScrubGlowView::SetShapes(std::vector<Shape> shapes) {
++  shapes_ = std::move(shapes);
++  SchedulePaint();
++}
++
++void TabScrubGlowView::OnPaint(gfx::Canvas* canvas) {
++  const ui::ColorProvider* provider = GetColorProvider();
++  if (!provider) {
++    return;
++  }
++  const SkColor accent = provider->GetColor(ui::kColorSysPrimary);
++
++  for (const Shape& shape : shapes_) {
++    gfx::ScopedCanvas scoped(canvas);
++    if (shape.clip) {
++      canvas->ClipRect(*shape.clip);
++    }
++
++    const SkRRect outline = SkRRect::MakeRectXY(
++        gfx::RectFToSkRect(shape.bounds), shape.corner_radius,
++        shape.corner_radius);
++
++    // Light spilling out from the edge. The inside is cut away so the halo
++    // never darkens the label underneath.
++    {
++      gfx::ScopedCanvas halo_scope(canvas);
++      canvas->sk_canvas()->clipRRect(outline, SkClipOp::kDifference,
++                                     /*doAntiAlias=*/true);
++      cc::PaintFlags halo_flags;
++      halo_flags.setAntiAlias(true);
++      halo_flags.setColor(SK_ColorTRANSPARENT);
++      halo_flags.setLooper(gfx::CreateShadowDrawLooper(
++          {gfx::ShadowValue(gfx::Vector2d(), kHaloBlur,
++                            SkColorSetA(accent, shape.is_pane ? 0x88 : 0xA0))}));
++      canvas->DrawRoundRect(shape.bounds, shape.corner_radius, halo_flags);
++    }
++
++    // A faint tint inside. Panes cover page content, so theirs is fainter.
++    cc::PaintFlags fill_flags;
++    fill_flags.setAntiAlias(true);
++    fill_flags.setColor(SkColorSetA(accent, shape.is_pane ? 0x0E : 0x2A));
++    canvas->DrawRoundRect(shape.bounds, shape.corner_radius, fill_flags);
++
++    // Crisp edge.
++    cc::PaintFlags edge_flags;
++    edge_flags.setAntiAlias(true);
++    edge_flags.setStyle(cc::PaintFlags::kStroke_Style);
++    edge_flags.setStrokeWidth(kOutlineWidth);
++    edge_flags.setColor(SkColorSetA(accent, 0xE6));
++    gfx::RectF edge = shape.bounds;
++    edge.Inset(kOutlineWidth / 2);
++    canvas->DrawRoundRect(edge, shape.corner_radius, edge_flags);
++  }
++}
++
++BEGIN_METADATA(TabScrubGlowView)
++END_METADATA
++
++}  // namespace helium
+--- /dev/null
++++ b/chrome/browser/ui/views/helium/helium_tab_scrub_glow_view.h
+@@ -0,0 +1,51 @@
++// Copyright 2026 The Helide Authors
++// Use of this source code is governed by the GPL-3.0 license in LICENSE.
++
++#ifndef CHROME_BROWSER_UI_VIEWS_HELIUM_HELIUM_TAB_SCRUB_GLOW_VIEW_H_
++#define CHROME_BROWSER_UI_VIEWS_HELIUM_HELIUM_TAB_SCRUB_GLOW_VIEW_H_
++
++#include <optional>
++#include <vector>
++
++#include "ui/base/metadata/metadata_header_macros.h"
++#include "ui/gfx/geometry/rect.h"
++#include "ui/gfx/geometry/rect_f.h"
++#include "ui/views/view.h"
++
++namespace helium {
++
++// A transparent overlay that draws the glow of the tab (or pane) a
++// three-finger swipe would land on. It never takes input.
++class TabScrubGlowView final : public views::View {
++  METADATA_HEADER(TabScrubGlowView, views::View)
++
++ public:
++  struct Shape {
++    // In this view's coordinates.
++    gfx::RectF bounds;
++    float corner_radius = 8.0f;
++    // Glow is cut off outside this area, for tabs scrolled under the edge of
++    // the strip.
++    std::optional<gfx::Rect> clip;
++    // Panes are large, so they get an outline and a faint fill; tabs get a
++    // stronger fill.
++    bool is_pane = false;
++  };
++
++  TabScrubGlowView();
++  TabScrubGlowView(const TabScrubGlowView&) = delete;
++  TabScrubGlowView& operator=(const TabScrubGlowView&) = delete;
++  ~TabScrubGlowView() override;
++
++  void SetShapes(std::vector<Shape> shapes);
++
++  // views::View:
++  void OnPaint(gfx::Canvas* canvas) override;
++
++ private:
++  std::vector<Shape> shapes_;
++};
++
++}  // namespace helium
++
++#endif  // CHROME_BROWSER_UI_VIEWS_HELIUM_HELIUM_TAB_SCRUB_GLOW_VIEW_H_
+--- /dev/null
++++ b/chrome/browser/ui/views/helium/helium_tab_scrub_model.cc
+@@ -0,0 +1,69 @@
++// Copyright 2026 The Helide Authors
++// Use of this source code is governed by the GPL-3.0 license in LICENSE.
++
++#include "chrome/browser/ui/views/helium/helium_tab_scrub_model.h"
++
++#include <algorithm>
++#include <cmath>
++
++namespace helium {
++
++SwipeAxisLock::Axis SwipeAxisLock::Add(double dx, double dy) {
++  if (axis_ != Axis::kUndecided || !std::isfinite(dx) || !std::isfinite(dy)) {
++    return axis_;
++  }
++  total_x_ += dx;
++  total_y_ += dy;
++  if (std::hypot(total_x_, total_y_) < kLockDistance) {
++    return axis_;
++  }
++  axis_ = std::abs(total_x_) > std::abs(total_y_) ? Axis::kHorizontal
++                                                  : Axis::kVertical;
++  return axis_;
++}
++
++double SwipeAxisLock::TakeCarry() {
++  if (carry_taken_ || axis_ == Axis::kUndecided) {
++    return 0.0;
++  }
++  carry_taken_ = true;
++  return axis_ == Axis::kHorizontal ? total_x_ : total_y_;
++}
++
++// static
++double ScrubPosition::TravelPerTab(int tab_count) {
++  // 28 DIPs per tab for a few tabs, up to 64 for a very long strip.
++  return 28.0 + 0.9 * std::clamp(tab_count, 0, 40);
++}
++
++ScrubPosition::ScrubPosition(int count, int start_index, double travel_per_item)
++    : count_(std::max(count, 1)),
++      start_index_(std::clamp(start_index, 0, std::max(count, 1) - 1)),
++      travel_per_item_(std::max(travel_per_item, 1.0)),
++      position_(start_index_) {}
++
++void ScrubPosition::Move(double finger_travel) {
++  if (!std::isfinite(finger_travel)) {
++    return;
++  }
++  position_ = std::clamp(position_ + finger_travel / travel_per_item_, 0.0,
++                         static_cast<double>(count_ - 1));
++}
++
++int ScrubPosition::NearestIndex() const {
++  return std::clamp(static_cast<int>(std::lround(position_)), 0, count_ - 1);
++}
++
++void ScrubPosition::SnapToNearest() {
++  position_ = NearestIndex();
++}
++
++int ScrubPosition::FloorIndex() const {
++  return std::clamp(static_cast<int>(std::floor(position_)), 0, count_ - 1);
++}
++
++double ScrubPosition::Fraction() const {
++  return std::clamp(position_ - FloorIndex(), 0.0, 1.0);
++}
++
++}  // namespace helium
+--- /dev/null
++++ b/chrome/browser/ui/views/helium/helium_tab_scrub_model.h
+@@ -0,0 +1,81 @@
++// Copyright 2026 The Helide Authors
++// Use of this source code is governed by the GPL-3.0 license in LICENSE.
++
++#ifndef CHROME_BROWSER_UI_VIEWS_HELIUM_HELIUM_TAB_SCRUB_MODEL_H_
++#define CHROME_BROWSER_UI_VIEWS_HELIUM_HELIUM_TAB_SCRUB_MODEL_H_
++
++// Math for three-finger tab scrubbing. Kept free of Chromium dependencies so
++// it can be tested on its own.
++
++namespace helium {
++
++// Decides which axis a swipe moves along, from its first frames of motion.
++class SwipeAxisLock {
++ public:
++  enum class Axis { kUndecided, kHorizontal, kVertical };
++
++  // Finger travel, in DIPs, before an axis is chosen. Below this a resting
++  // hand does not start anything.
++  static constexpr double kLockDistance = 12.0;
++
++  // Adds one frame of finger motion and returns the axis. It is
++  // kUndecided until the motion is large enough, and never changes afterwards.
++  Axis Add(double dx, double dy);
++
++  Axis axis() const { return axis_; }
++
++  // Motion along the chosen axis that arrived before the axis was chosen, so
++  // that no finger travel is lost. Returns 0 after the first call.
++  double TakeCarry();
++
++ private:
++  Axis axis_ = Axis::kUndecided;
++  double total_x_ = 0.0;
++  double total_y_ = 0.0;
++  bool carry_taken_ = false;
++};
++
++// A continuous position along `count` ordered items (tabs or panes). The
++// position is a real number: 2.5 is halfway between item 2 and item 3. Finger
++// travel moves it directly, with no steps and no wrapping.
++class ScrubPosition {
++ public:
++  // Finger travel needed to move one pane in a split view.
++  static constexpr double kTravelPerPane = 170.0;
++
++  // Finger travel needed to move one tab. Grows with the tab count so that a
++  // long strip stays controllable, as in ChromeOS tab scrubbing.
++  static double TravelPerTab(int tab_count);
++
++  ScrubPosition(int count, int start_index, double travel_per_item);
++
++  // Moves the position by finger travel in DIPs. Positive moves toward higher
++  // indices. The position stops at the first and last item.
++  void Move(double finger_travel);
++
++  double position() const { return position_; }
++  int count() const { return count_; }
++  int start_index() const { return start_index_; }
++
++  // The item the position is closest to. This is where lifting the fingers
++  // lands.
++  int NearestIndex() const;
++
++  // Moves the position onto the nearest item, as when the fingers lift.
++  void SnapToNearest();
++
++  // The item at or before the position, and how far past it the position is
++  // (0 up to, not including, 1). Used to place a glow between two items.
++  int FloorIndex() const;
++  double Fraction() const;
++
++ private:
++  int count_;
++  int start_index_;
++  double travel_per_item_;
++  double position_;
++};
++
++}  // namespace helium
++
++#endif  // CHROME_BROWSER_UI_VIEWS_HELIUM_HELIUM_TAB_SCRUB_MODEL_H_
+--- /dev/null
++++ b/chrome/browser/ui/views/helium/helium_tab_scrubber.cc
+@@ -0,0 +1,521 @@
++// Copyright 2026 The Helide Authors
++// Use of this source code is governed by the GPL-3.0 license in LICENSE.
++
++#include "chrome/browser/ui/views/helium/helium_tab_scrubber.h"
++
++#include <algorithm>
++#include <cmath>
++#include <memory>
++#include <utility>
++
++#include "base/functional/bind.h"
++#include "base/logging.h"
++#include "base/time/time.h"
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "chrome/browser/ui/tabs/tab_strip_user_gesture_details.h"
++#include "chrome/browser/ui/views/frame/browser_view.h"
++#include "chrome/browser/ui/views/frame/contents_container_view.h"
++#include "chrome/browser/ui/views/frame/contents_web_view.h"
++#include "chrome/browser/ui/views/frame/multi_contents_view.h"
++#include "chrome/browser/ui/views/helium/helium_tab_scrub_glow_view.h"
++#include "chrome/browser/ui/views/tabs/common/tab_strip_view.h"
++#include "chrome/browser/ui/views/tabs/common/tab_view.h"
++#include "chrome/browser/ui/views/tabs/tab.h"
++#include "chrome/common/helium_tab_scrub_prefs.h"
++#include "components/prefs/pref_service.h"
++#include "components/tabs/public/tab_interface.h"
++#include "content/public/browser/web_contents.h"
++#include "ui/aura/window.h"
++#include "ui/compositor/layer.h"
++#include "ui/events/event.h"
++#include "ui/gfx/geometry/rect_conversions.h"
++#include "ui/gfx/animation/tween.h"
++#include "ui/views/animation/animation_builder.h"
++#include "ui/views/widget/widget.h"
++
++namespace helium {
++
++namespace {
++
++constexpr base::TimeDelta kFadeInDuration = base::Milliseconds(110);
++constexpr base::TimeDelta kFadeOutDuration = base::Milliseconds(190);
++// A swipe with no motion for this long has lost its end event.
++constexpr base::TimeDelta kStaleSwipeTimeout = base::Milliseconds(800);
++// Room around the strip for the soft edge of the glow.
++constexpr int kStripClipOutset = 6;
++constexpr float kTabCornerRadius = 8.0f;
++constexpr float kPaneCornerRadius = 12.0f;
++
++gfx::RectF Lerp(const gfx::RectF& a, const gfx::RectF& b, double t) {
++  const auto mix = [t](float from, float to) {
++    return static_cast<float>(from + (to - from) * t);
++  };
++  return gfx::RectF(mix(a.x(), b.x()), mix(a.y(), b.y()),
++                    mix(a.width(), b.width()), mix(a.height(), b.height()));
++}
++
++// Removes the overlay once its fade-out has finished, unless the browser
++// window went away first.
++void RemoveFadedOverlay(std::shared_ptr<views::ViewTracker> tracker) {
++  if (views::View* overlay = tracker->view()) {
++    if (views::View* parent = overlay->parent()) {
++      parent->RemoveChildViewT(overlay);
++    }
++  }
++}
++
++}  // namespace
++
++TabScrubber::TabScrubber(BrowserView* browser_view, views::Widget* widget)
++    : browser_view_(browser_view) {
++  if (!widget) {
++    return;
++  }
++  window_ = widget->GetNativeWindow();
++  if (!window_) {
++    return;
++  }
++  window_->AddPreTargetHandler(this);
++  window_observation_.Observe(window_);
++}
++
++TabScrubber::~TabScrubber() {
++  RemoveOverlay();
++  if (window_) {
++    window_->RemovePreTargetHandler(this);
++  }
++}
++
++void TabScrubber::OnWindowDestroying(aura::Window* window) {
++  window_->RemovePreTargetHandler(this);
++  window_observation_.Reset();
++  window_ = nullptr;
++  RemoveOverlay();
++}
++
++void TabScrubber::OnScrollEvent(ui::ScrollEvent* event) {
++  VLOG(2) << "Tab scrub: scroll event type="
++          << static_cast<int>(event->type())
++          << " fingers=" << event->finger_count()
++          << " x=" << event->x_offset() << " y=" << event->y_offset();
++
++  // The end of a swipe. Aura reports no finger count on these (as in ChromeOS
++  // tab scrubbing), so they are recognised by the swipe in progress. The end
++  // of an ordinary two-finger scroll arrives here too: leave it to the page.
++  if (event->IsFlingScrollEvent()) {
++    if (state_ == State::kIdle) {
++      return;
++    }
++    event->SetHandled();
++    Finish(/*commit=*/event->type() == ui::EventType::kScrollFlingStart);
++    return;
++  }
++
++  if (event->finger_count() < 3) {
++    return;
++  }
++
++  // A swipe with three or more fingers is never a page scroll, even when
++  // the feature is off or the swipe has nothing to do.
++  event->SetHandled();
++  if (event->finger_count() != 3 || event->type() != ui::EventType::kScroll) {
++    return;
++  }
++
++  // A swipe whose end never arrived must not swallow the next one.
++  if (state_ != State::kIdle &&
++      event->time_stamp() - last_motion_time_ > kStaleSwipeTimeout) {
++    Finish(/*commit=*/false);
++  }
++  last_motion_time_ = event->time_stamp();
++  OnMotion(event->x_offset(), event->y_offset());
++}
++
++bool TabScrubber::IsEnabled() {
++  auto* browser_view = static_cast<BrowserView*>(browser_view_.view());
++  return browser_view &&
++         browser_view->GetProfile()->GetPrefs()->GetBoolean(
++             helium::kThreeFingerTabScrub);
++}
++
++void TabScrubber::OnMotion(double dx, double dy) {
++  switch (state_) {
++    case State::kIdle:
++      if (!IsEnabled()) {
++        state_ = State::kIgnored;
++        return;
++      }
++      axis_lock_ = SwipeAxisLock();
++      axis_ = SwipeAxisLock::Axis::kUndecided;
++      state_ = State::kUndecided;
++      [[fallthrough]];
++    case State::kUndecided: {
++      const SwipeAxisLock::Axis axis = axis_lock_.Add(dx, dy);
++      if (axis != SwipeAxisLock::Axis::kUndecided) {
++        StartScrubbing(axis, axis_lock_.TakeCarry());
++      }
++      return;
++    }
++    case State::kScrubbing: {
++      position_->Move(axis_ == SwipeAxisLock::Axis::kHorizontal ? dx : dy);
++      if (!Refresh()) {
++        // The tabs changed under the swipe. Stop following it, and do not
++        // switch to anything when the fingers lift.
++        RemoveOverlay();
++        position_.reset();
++        state_ = State::kIgnored;
++      }
++      return;
++    }
++    case State::kIgnored:
++      return;
++  }
++}
++
++void TabScrubber::StartScrubbing(SwipeAxisLock::Axis axis, double carry) {
++  axis_ = axis;
++  const bool started = axis == SwipeAxisLock::Axis::kVertical
++                           ? StartTabScrub()
++                           : StartPaneScrub();
++  auto* browser_view = static_cast<BrowserView*>(browser_view_.view());
++  if (!started || !browser_view) {
++    VLOG(1) << "Tab scrub: nothing to scrub on the "
++            << (axis == SwipeAxisLock::Axis::kVertical ? "vertical"
++                                                        : "horizontal")
++            << " axis";
++    position_.reset();
++    state_ = State::kIgnored;
++    return;
++  }
++  VLOG(1) << "Tab scrub: started on the "
++          << (axis == SwipeAxisLock::Axis::kVertical ? "vertical"
++                                                      : "horizontal")
++          << " axis with " << position_->count() << " items";
++
++  auto overlay = std::make_unique<TabScrubGlowView>();
++  overlay->SetBoundsRect(browser_view->GetLocalBounds());
++  views::View* added = browser_view->AddChildView(std::move(overlay));
++  overlay_.SetView(added);
++  added->layer()->SetOpacity(0.0f);
++  views::AnimationBuilder()
++      .Once()
++      .SetDuration(kFadeInDuration)
++      .SetOpacity(added->layer(), 1.0f, gfx::Tween::EASE_OUT);
++
++  position_->Move(carry);
++  state_ = State::kScrubbing;
++  if (!Refresh()) {
++    RemoveOverlay();
++    position_.reset();
++    state_ = State::kIgnored;
++  }
++}
++
++bool TabScrubber::StartTabScrub() {
++  auto* browser_view = static_cast<BrowserView*>(browser_view_.view());
++  if (!browser_view) {
++    return false;
++  }
++  const std::vector<TabItem> items = GatherTabs();
++  if (items.size() < 2) {
++    return false;
++  }
++  const int active =
++      browser_view->browser()->GetTabStripModel()->active_index();
++  const auto it = std::ranges::find(items, active, &TabItem::model_index);
++  if (it == items.end()) {
++    return false;
++  }
++  const int start = static_cast<int>(it - items.begin());
++  start_model_index_ = active;
++  last_scrolled_item_ = start;
++  position_.emplace(static_cast<int>(items.size()), start,
++                    ScrubPosition::TravelPerTab(static_cast<int>(items.size())));
++  return true;
++}
++
++bool TabScrubber::StartPaneScrub() {
++  auto* browser_view = static_cast<BrowserView*>(browser_view_.view());
++  if (!browser_view) {
++    return false;
++  }
++  const std::vector<PaneItem> panes = GatherPanes();
++  if (panes.size() != 2) {
++    return false;
++  }
++  const int active =
++      browser_view->browser()->GetTabStripModel()->active_index();
++  const auto it = std::ranges::find(panes, active, &PaneItem::model_index);
++  if (it == panes.end()) {
++    return false;
++  }
++  start_model_index_ = active;
++  last_scrolled_item_ = -1;
++  position_.emplace(2, static_cast<int>(it - panes.begin()),
++                    ScrubPosition::kTravelPerPane);
++  return true;
++}
++
++void TabScrubber::Finish(bool commit) {
++  auto* browser_view = static_cast<BrowserView*>(browser_view_.view());
++  std::optional<int> target_model_index;
++
++  if (state_ == State::kScrubbing && position_ && browser_view) {
++    position_->SnapToNearest();
++    if (Refresh() && commit) {
++      const int nearest = position_->NearestIndex();
++      if (axis_ == SwipeAxisLock::Axis::kVertical) {
++        const std::vector<TabItem> items = GatherTabs();
++        if (nearest < static_cast<int>(items.size())) {
++          target_model_index = items[nearest].model_index;
++        }
++      } else {
++        const std::vector<PaneItem> panes = GatherPanes();
++        if (nearest < static_cast<int>(panes.size())) {
++          target_model_index = panes[nearest].model_index;
++        }
++      }
++    }
++  }
++
++  // Let the glow settle on the landing tab and fade, then drop it.
++  if (views::View* overlay = overlay_.view()) {
++    overlay_.SetView(nullptr);
++    auto tracker = std::make_shared<views::ViewTracker>(overlay);
++    views::AnimationBuilder()
++        .OnEnded(base::BindOnce(&RemoveFadedOverlay, tracker))
++        .OnAborted(base::BindOnce(&RemoveFadedOverlay, tracker))
++        .Once()
++        .SetDuration(kFadeOutDuration)
++        .SetOpacity(overlay->layer(), 0.0f, gfx::Tween::EASE_IN);
++  }
++
++  position_.reset();
++  state_ = State::kIdle;
++  axis_ = SwipeAxisLock::Axis::kUndecided;
++
++  VLOG(1) << "Tab scrub: finished, commit=" << commit << " target="
++          << (target_model_index ? *target_model_index : -1);
++  if (target_model_index && browser_view) {
++    TabStripModel* model = browser_view->browser()->GetTabStripModel();
++    if (*target_model_index != model->active_index() &&
++        model->ContainsIndex(*target_model_index)) {
++      model->ActivateTabAt(
++          *target_model_index,
++          TabStripUserGestureDetails(
++              TabStripUserGestureDetails::GestureType::kOther));
++    }
++  }
++}
++
++void TabScrubber::RemoveOverlay() {
++  if (views::View* overlay = overlay_.view()) {
++    overlay_.SetView(nullptr);
++    if (views::View* parent = overlay->parent()) {
++      parent->RemoveChildViewT(overlay);
++    }
++  }
++}
++
++bool TabScrubber::Refresh() {
++  auto* browser_view = static_cast<BrowserView*>(browser_view_.view());
++  auto* overlay = static_cast<TabScrubGlowView*>(overlay_.view());
++  if (!browser_view || !overlay || !position_) {
++    return false;
++  }
++  overlay->SetBoundsRect(browser_view->GetLocalBounds());
++
++  const int low = position_->FloorIndex();
++  const int high = std::min(low + 1, position_->count() - 1);
++  const double fraction = position_->Fraction();
++
++  std::optional<gfx::Rect> strip_clip;
++  if (TabStripView* strip = FindTabStripView()) {
++    strip_clip = gfx::ToEnclosingRect(BoundsInBrowserView(strip));
++    strip_clip->Outset(kStripClipOutset);
++  }
++
++  std::vector<TabScrubGlowView::Shape> shapes;
++  const std::vector<TabItem> tabs = GatherTabs();
++
++  if (axis_ == SwipeAxisLock::Axis::kVertical) {
++    if (static_cast<int>(tabs.size()) != position_->count() ||
++        tabs[position_->start_index()].model_index != start_model_index_) {
++      return false;
++    }
++    TabScrubGlowView::Shape tab_shape;
++    tab_shape.bounds = Lerp(BoundsInBrowserView(tabs[low].view),
++                            BoundsInBrowserView(tabs[high].view), fraction);
++    tab_shape.corner_radius = kTabCornerRadius;
++    tab_shape.clip = strip_clip;
++    shapes.push_back(tab_shape);
++
++    const int nearest = position_->NearestIndex();
++    if (nearest != last_scrolled_item_) {
++      last_scrolled_item_ = nearest;
++      ScrollTabIntoView(nearest);
++    }
++  } else {
++    const std::vector<PaneItem> panes = GatherPanes();
++    if (panes.size() != 2 ||
++        panes[position_->start_index()].model_index != start_model_index_) {
++      return false;
++    }
++    TabScrubGlowView::Shape pane_shape;
++    pane_shape.bounds = Lerp(BoundsInBrowserView(panes[low].container),
++                             BoundsInBrowserView(panes[high].container),
++                             fraction);
++    pane_shape.corner_radius = kPaneCornerRadius;
++    pane_shape.is_pane = true;
++    shapes.push_back(pane_shape);
++
++    // The tab each pane belongs to glows in the strip too.
++    const auto tab_for = [&tabs](int model_index) -> const views::View* {
++      for (const TabItem& item : tabs) {
++        if (item.model_index == model_index) {
++          return item.view;
++        }
++      }
++      return nullptr;
++    };
++    const views::View* low_tab = tab_for(panes[low].model_index);
++    const views::View* high_tab = tab_for(panes[high].model_index);
++    if (low_tab && high_tab) {
++      TabScrubGlowView::Shape tab_shape;
++      tab_shape.bounds = Lerp(BoundsInBrowserView(low_tab),
++                              BoundsInBrowserView(high_tab), fraction);
++      tab_shape.corner_radius = kTabCornerRadius;
++      tab_shape.clip = strip_clip;
++      shapes.push_back(tab_shape);
++    }
++  }
++
++  overlay->SetShapes(std::move(shapes));
++  return true;
++}
++
++std::vector<TabScrubber::TabItem> TabScrubber::GatherTabs() {
++  std::vector<TabItem> items;
++  auto* browser_view = static_cast<BrowserView*>(browser_view_.view());
++  if (!browser_view) {
++    return items;
++  }
++  views::View* strip_region = browser_view->tab_strip_view();
++  if (!strip_region) {
++    return items;
++  }
++  TabStripModel* model = browser_view->browser()->GetTabStripModel();
++
++  std::vector<views::View*> pending = {strip_region};
++  while (!pending.empty()) {
++    views::View* view = pending.back();
++    pending.pop_back();
++    // The collection-based tab strip, which also draws the vertical layout.
++    if (TabView* tab_view = views::AsViewClass<TabView>(view)) {
++      if (tab_view->IsClosing() || !tab_view->IsDrawn()) {
++        continue;
++      }
++      if (const tabs::TabInterface* tab_interface =
++              tab_view->GetTabInterface()) {
++        const int index = model->GetIndexOfTab(tab_interface);
++        if (index >= 0) {
++          items.push_back({tab_view, index});
++        }
++      }
++      continue;
++    }
++    if (Tab* tab = views::AsViewClass<Tab>(view)) {
++      if (tab->closing() || !tab->IsDrawn()) {
++        continue;
++      }
++      if (tabs::TabInterface* tab_interface = tab->tab_handle().Get()) {
++        const int index = model->GetIndexOfTab(tab_interface);
++        if (index >= 0) {
++          items.push_back({tab, index});
++        }
++      }
++      continue;
++    }
++    for (views::View* child : view->children()) {
++      pending.push_back(child);
++    }
++  }
++
++  std::ranges::sort(items, {}, &TabItem::model_index);
++  const auto duplicates = std::ranges::unique(
++      items, [](const TabItem& a, const TabItem& b) {
++        return a.model_index == b.model_index;
++      });
++  items.erase(duplicates.begin(), duplicates.end());
++  return items;
++}
++
++std::vector<TabScrubber::PaneItem> TabScrubber::GatherPanes() {
++  std::vector<PaneItem> panes;
++  auto* browser_view = static_cast<BrowserView*>(browser_view_.view());
++  if (!browser_view) {
++    return panes;
++  }
++  MultiContentsView* multi = browser_view->multi_contents_view();
++  if (!multi || !multi->IsInSplitView()) {
++    return panes;
++  }
++  TabStripModel* model = browser_view->browser()->GetTabStripModel();
++  for (ContentsContainerView* container :
++       {multi->GetActiveContentsContainerView(),
++        multi->GetInactiveContentsContainerView()}) {
++    if (!container || !container->contents_view()) {
++      return {};
++    }
++    content::WebContents* contents = container->contents_view()->web_contents();
++    const int index = contents ? model->GetIndexOfWebContents(contents) : -1;
++    if (index < 0) {
++      return {};
++    }
++    panes.push_back({container, index});
++  }
++  // Visual order, left to right, whichever pane is active.
++  std::ranges::sort(panes, {}, [this](const PaneItem& pane) {
++    return BoundsInBrowserView(pane.container).x();
++  });
++  return panes;
++}
++
++TabStripView* TabScrubber::FindTabStripView() {
++  auto* browser_view = static_cast<BrowserView*>(browser_view_.view());
++  if (!browser_view || !browser_view->tab_strip_view()) {
++    return nullptr;
++  }
++  std::vector<views::View*> pending = {browser_view->tab_strip_view()};
++  while (!pending.empty()) {
++    views::View* view = pending.back();
++    pending.pop_back();
++    if (TabStripView* strip = views::AsViewClass<TabStripView>(view)) {
++      return strip;
++    }
++    for (views::View* child : view->children()) {
++      pending.push_back(child);
++    }
++  }
++  return nullptr;
++}
++
++gfx::RectF TabScrubber::BoundsInBrowserView(const views::View* view) {
++  const auto* browser_view = static_cast<BrowserView*>(browser_view_.view());
++  return views::View::ConvertRectToTarget(
++      view, browser_view, gfx::RectF(view->GetLocalBounds()));
++}
++
++void TabScrubber::ScrollTabIntoView(int item_index) {
++  const std::vector<TabItem> items = GatherTabs();
++  if (item_index < 0 || item_index >= static_cast<int>(items.size())) {
++    return;
++  }
++  if (TabStripView* strip = FindTabStripView()) {
++    strip->ScrollToFitViews(items[item_index].view, nullptr);
++  }
++}
++
++}  // namespace helium
+--- /dev/null
++++ b/chrome/browser/ui/views/helium/helium_tab_scrubber.h
+@@ -0,0 +1,133 @@
++// Copyright 2026 The Helide Authors
++// Use of this source code is governed by the GPL-3.0 license in LICENSE.
++
++#ifndef CHROME_BROWSER_UI_VIEWS_HELIUM_HELIUM_TAB_SCRUBBER_H_
++#define CHROME_BROWSER_UI_VIEWS_HELIUM_HELIUM_TAB_SCRUBBER_H_
++
++#include <memory>
++#include <optional>
++#include <vector>
++
++#include "base/memory/raw_ptr.h"
++#include "base/scoped_observation.h"
++#include "base/time/time.h"
++#include "chrome/browser/ui/views/helium/helium_tab_scrub_model.h"
++#include "ui/aura/window_observer.h"
++#include "ui/events/event_handler.h"
++#include "ui/gfx/geometry/rect_f.h"
++#include "ui/views/view_tracker.h"
++
++class BrowserView;
++class TabStripView;
++
++namespace aura {
++class Window;
++}
++
++namespace views {
++class Widget;
++}
++
++namespace helium {
++
++class TabScrubGlowView;
++
++// Three-finger touchpad swipes that move through tabs, as a continuous
++// action. It is the Linux counterpart of ChromeOS tab scrubbing, extended
++// to two axes:
++//
++//   vertical swipe    - moves through the tabs in the tab strip
++//   horizontal swipe  - moves between the panes of a split view
++//
++// While the fingers are down a glow slides smoothly over the tab (or pane)
++// the swipe would land on. The page does not change until the fingers lift,
++// when the nearest tab becomes active. Nothing moves in steps: finger travel
++// maps straight to a position between tabs.
++//
++// Wayland delivers these swipes as scroll events carrying a finger count (see
++// WaylandEventSource::OnSwipeEvent). This handler runs before the page sees
++// them, so a three-finger swipe never scrolls a web page.
++class TabScrubber final : public ui::EventHandler,
++                          public aura::WindowObserver {
++ public:
++  // `widget` is the browser window the swipes arrive in.
++  TabScrubber(BrowserView* browser_view, views::Widget* widget);
++  TabScrubber(const TabScrubber&) = delete;
++  TabScrubber& operator=(const TabScrubber&) = delete;
++  ~TabScrubber() override;
++
++  // ui::EventHandler:
++  void OnScrollEvent(ui::ScrollEvent* event) override;
++
++  // aura::WindowObserver:
++  void OnWindowDestroying(aura::Window* window) override;
++
++ private:
++  enum class State {
++    // No swipe in progress.
++    kIdle,
++    // Fingers are down but have not moved far enough to choose an axis.
++    kUndecided,
++    // Following the fingers.
++    kScrubbing,
++    // A swipe that does nothing here (no split view, one tab). It is still
++    // consumed so it cannot scroll the page.
++    kIgnored,
++  };
++
++  struct TabItem {
++    // A tab view (TabView in the collection-based strip, Tab in older ones).
++    raw_ptr<views::View> view;
++    int model_index;
++  };
++  struct PaneItem {
++    raw_ptr<views::View> container;
++    int model_index;
++  };
++
++  bool IsEnabled();
++  void OnMotion(double dx, double dy);
++  void StartScrubbing(SwipeAxisLock::Axis axis, double carry);
++  bool StartTabScrub();
++  bool StartPaneScrub();
++  void Finish(bool commit);
++  void EndGesture();
++  void RemoveOverlay();
++
++  // Positions the glow for the current position. Returns false if the tabs
++  // changed under the swipe, which ends it without switching.
++  bool Refresh();
++
++  std::vector<TabItem> GatherTabs();
++  std::vector<PaneItem> GatherPanes();
++  TabStripView* FindTabStripView();
++
++  gfx::RectF BoundsInBrowserView(const views::View* view);
++  void ScrollTabIntoView(int item_index);
++
++  views::ViewTracker browser_view_;
++  raw_ptr<aura::Window> window_ = nullptr;
++  base::ScopedObservation<aura::Window, aura::WindowObserver>
++      window_observation_{this};
++
++  State state_ = State::kIdle;
++  SwipeAxisLock axis_lock_;
++  SwipeAxisLock::Axis axis_ = SwipeAxisLock::Axis::kUndecided;
++  std::optional<ScrubPosition> position_;
++
++  // The tab that was active when the swipe started, to notice changes under
++  // the swipe.
++  int start_model_index_ = -1;
++  // Last tab brought into view, so the strip scrolls only when the target
++  // changes.
++  int last_scrolled_item_ = -1;
++
++  // When the last frame of motion arrived, to drop a swipe whose end was lost.
++  base::TimeTicks last_motion_time_;
++
++  views::ViewTracker overlay_;
++};
++
++}  // namespace helium
++
++#endif  // CHROME_BROWSER_UI_VIEWS_HELIUM_HELIUM_TAB_SCRUBBER_H_
+--- /dev/null
++++ b/chrome/common/helium_tab_scrub_prefs.h
+@@ -0,0 +1,16 @@
++// Copyright 2026 The Helide Authors
++// Use of this source code is governed by the GPL-3.0 license in LICENSE.
++
++#ifndef CHROME_COMMON_HELIUM_TAB_SCRUB_PREFS_H_
++#define CHROME_COMMON_HELIUM_TAB_SCRUB_PREFS_H_
++
++namespace helium {
++
++// Linux only. A boolean pref, on by default, that lets a three-finger touchpad
++// swipe move through tabs (vertical) and split view panes (horizontal).
++inline constexpr char kThreeFingerTabScrub[] =
++    "helium.browser.three_finger_tab_scrub";
++
++}  // namespace helium
++
++#endif  // CHROME_COMMON_HELIUM_TAB_SCRUB_PREFS_H_

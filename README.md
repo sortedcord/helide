@@ -42,6 +42,14 @@ Let the desktop show through transparent page backgrounds without fading images,
 
 Swipe through history with a fluid page stack: the page moves with your fingers while the toolbar stays put. [Swipe settings and behavior](#slide-pages-when-swiping).
 
+### Three-finger tab scrubbing
+
+<p align="center">
+  <img src="docs/illustrations/tab-scrub.svg" alt="Three fingers slide down the touchpad, a glow slides over the tab list, and lifting switches to the glowing tab." width="720">
+</p>
+
+Slide three fingers up or down to glow over the tabs, then lift to switch. The glow follows your fingers continuously and the page stays put until you lift. Swipe sideways to move between split view panes. [How it works and how to set it up](#switch-tabs-with-three-finger-swipes).
+
 ### Linux-aware Energy Saver
 
 <p align="center">
@@ -137,6 +145,9 @@ The Linux patch is [`patches/helium/linux/wayland-frame-opacity.patch`](patches/
   window is declared opaque. The compositor then skips blending it, and can
   scan fullscreen video out directly. The transparency comes back on exit.
 
+- Switches tabs with continuous three-finger swipes, in
+  [`linux-three-finger-tab-scrub.patch`](patches/helium/linux/linux-three-finger-tab-scrub.patch).
+  See [Switch tabs with three-finger swipes](#switch-tabs-with-three-finger-swipes).
 - Lets AI agents and other automation control the browser without taking it
   over, in
   [`helium-agent-access.patch`](patches/helium/linux/helium-agent-access.patch),
@@ -232,6 +243,7 @@ python3 scripts/check-frame-opacity-patch.py --patch helium/linux/helium-agent-a
 python3 scripts/check-frame-opacity-patch.py --patch helium/linux/helium-target-march.patch
 python3 scripts/check-frame-opacity-patch.py --patch helium/linux/helide-branding.patch
 python3 scripts/check-frame-opacity-patch.py --patch helium/linux/linux-window-close-toggle.patch
+python3 scripts/check-frame-opacity-patch.py --patch helium/linux/linux-three-finger-tab-scrub.patch
 ```
 
 To turn edits made in `build/src` into a patch against the pinned upstream
@@ -398,6 +410,45 @@ How it works, and its limits:
   painted, and the page underneath is clipped to the strip the top page has
   uncovered, so the desktop (not the other page) shows through transparent
   areas. With it off, the slide is drawn over a solid themed background.
+
+## Switch tabs with three-finger swipes
+
+This is the Linux version of ChromeOS tab scrubbing, extended to two axes and made continuous.
+
+- **Swipe up or down** with three fingers to move through the tab strip. A glow slides over the tab list with your fingers, between rows as well as on them, and it stops at the first and last tab instead of wrapping. The active tab and the page do not change while your fingers are down.
+- **Lift your fingers** to switch to the tab nearest the glow. Going out and coming back to where you started switches nothing, and a swipe the compositor cancels switches nothing.
+- **Swipe left or right** to move between the two panes of a split view. The glow slides between the panes, and the pane's tab glows in the strip too. Outside a split view this does nothing.
+- A resting hand does not start anything: the swipe only chooses vertical or horizontal after about 12 DIPs of movement, and then stays on that axis. The more tabs you have, the more finger travel each tab needs (28 DIPs per tab, up to 64).
+- A three-finger swipe never scrolls a web page, whether the feature is on or off.
+
+It is on by default and can be turned off in **Settings → Behavior → Switch tabs with three-finger swipes** (Wayland only). It is designed for the vertical tab layout, where the finger follows the tab list. With the horizontal layout, a vertical swipe still moves the glow along the strip.
+
+### What the compositor has to do
+
+Helide gets three-finger swipes the way any Wayland app gets touchpad gestures: through `zwp_pointer_gestures_v1`, which delivers a live stream (the finger count, then the motion of the fingers on every touchpad frame, then the end). Chromium never listened for swipes on Wayland, so [`linux-three-finger-tab-scrub.patch`](patches/helium/linux/linux-three-finger-tab-scrub.patch) adds that and hands the stream to the browser the way ChromeOS does, as scroll events that carry a finger count.
+
+The compositor must also pass three-finger swipes on, and many keep them for themselves (GNOME, KDE and niri use them for workspaces and overview). Helide only sees them when the compositor does not claim them.
+
+On **niri**, the [fork](https://github.com/sortedcord/niri) on the branch `feat/forward-swipe-to-client` adds a `forward-to-client` gesture action, which hands the whole swipe to the window under the pointer, optionally only for windows whose app-id matches:
+
+```kdl
+touchpad-gesture fingers=3 modifiers="any" {
+    forward-to-client app-id="^helium$"
+}
+```
+
+Over any other window the binding behaves like `ignore`. Helide's app-id is `helium`.
+
+### Tests
+
+The browser side can be tested without a touchpad or a desktop session. [`tests/fake-wayland-compositor`](tests/fake-wayland-compositor) is a small Wayland compositor that sends real swipe events, and the test starts Helide against it with a temporary profile:
+
+```sh
+node scripts/test-three-finger-tab-scrub.mjs   # needs a built tree, libwayland and wayland-scanner
+scripts/test-tab-scrub-model.sh                # the scrubbing math on its own
+```
+
+The end-to-end test covers vertical scrubbing, the continuous glow, commit on lift, the ends of the strip, cancelled and tiny swipes, two-finger swipes being left to the page, and the setting being off. It does not cover split view panes: those need a real split view, which the test cannot create yet.
 
 ## Set the opacity
 

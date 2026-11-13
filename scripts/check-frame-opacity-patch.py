@@ -49,6 +49,7 @@ def main():
             "helium/linux/helium-target-march.patch",
             "helium/linux/helide-branding.patch",
             "helium/linux/linux-window-close-toggle.patch",
+            "helium/linux/linux-three-finger-tab-scrub.patch",
         ],
     )
     selected = parser.parse_args().patch
