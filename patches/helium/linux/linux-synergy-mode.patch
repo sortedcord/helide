@@ -1,0 +1,2254 @@
+--- a/chrome/browser/extensions/api/settings_private/prefs_util.cc
++++ b/chrome/browser/extensions/api/settings_private/prefs_util.cc
+@@ -36,6 +36,7 @@
+ #include "chrome/browser/ui/tabs/tab_strip_prefs.h"
+ #include "chrome/browser/ui/toolbar/toolbar_pref_names.h"
+ #include "chrome/common/extensions/api/settings_private.h"
++#include "chrome/common/helium_synergy_prefs.h"
+ #include "chrome/common/helium_tab_scrub_prefs.h"
+ #include "chrome/common/pref_names.h"
+ #include "components/autofill/core/common/autofill_prefs.h"
+@@ -248,6 +249,9 @@
+       settings_api::PrefType::kBoolean;
+   (*s_allowlist)[::helium::kThreeFingerTabScrubInvert] =
+       settings_api::PrefType::kBoolean;
++  (*s_allowlist)[::helium::kSynergyMode] = settings_api::PrefType::kBoolean;
++  (*s_allowlist)[::helium::kSynergyAutohideAddressBar] =
++      settings_api::PrefType::kBoolean;
+   (*s_allowlist)[::prefs::kHeliumAgentAccessEnabled] =
+       settings_api::PrefType::kBoolean;
+ 
+--- a/chrome/browser/resources/settings/appearance_page/appearance_layout_page.html.ts
++++ b/chrome/browser/resources/settings/appearance_page/appearance_layout_page.html.ts
+@@ -32,6 +32,20 @@
+       pref-key="helium.browser.vertical_right_aligned"
+       label="$i18n{tabStripRightAlign}">
+   </settings-toggle-button>
++  <settings-toggle-button class="hr" id="synergyMode"
++      ?hidden="${!this.showVerticalSettings_()}"
++      pref-key="helium.browser.synergy_mode"
++      label="$i18n{synergyMode}"
++      sub-label="$i18n{synergyModeDescription}">
++  </settings-toggle-button>
++  <div class="list-frame indented-toggles"
++      ?hidden="${!this.showSynergySettings_()}">
++    <settings-toggle-button class="hr" id="synergyAutohideAddressBar"
++        pref-key="helium.browser.synergy_autohide_address_bar"
++        label="$i18n{synergyAutohideAddressBar}"
++        sub-label="$i18n{synergyAutohideAddressBarDescription}">
++    </settings-toggle-button>
++  </div>
+   <settings-toggle-button class="hr" disabled
+       ?hidden="${!this.showVerticalTabsExpandOnHoverSetting_() ||
+                  !this.isExpandOnHoverForcedByZenMode_()}"
+--- a/chrome/browser/resources/settings/appearance_page/appearance_layout_page.ts
++++ b/chrome/browser/resources/settings/appearance_page/appearance_layout_page.ts
+@@ -55,6 +55,7 @@
+       browserLayoutOptions_: {type: Array},
+       showVerticalTabsExpandOnHoverEnabled_: {type: Boolean},
+       zenModePref_: {type: Object},
++      synergyModePref_: {type: Object},
+       zenModeSidebarPinnedPref_: {type: Object},
+       forcedExpandOnHoverPref_: {type: Object},
+     };
+@@ -63,6 +64,8 @@
+   protected accessor browserLayoutPref_: PrefObject<number>|undefined =
+       undefined;
+   protected accessor zenModePref_: PrefObject<boolean>|undefined = undefined;
++  protected accessor synergyModePref_: PrefObject<boolean>|undefined =
++      undefined;
+   protected accessor zenModeSidebarPinnedPref_: PrefObject<boolean>|undefined =
+       undefined;
+   protected accessor forcedExpandOnHoverPref_: PrefObject<boolean> = {
+@@ -103,12 +106,17 @@
+     this.mirrorPrefs({
+       'helium.browser.layout': 'browserLayoutPref_',
+       'helium.browser.zen_mode': 'zenModePref_',
++      'helium.browser.synergy_mode': 'synergyModePref_',
+       'helium.browser.zen_mode_sidebar_pinned': 'zenModeSidebarPinnedPref_',
+     });
+   }
+ 
+   protected showVerticalSettings_(): boolean {
+     return this.browserLayoutPref_?.value === BrowserLayout.VERTICAL;
++  }
++
++  protected showSynergySettings_(): boolean {
++    return this.showVerticalSettings_() && !!this.synergyModePref_?.value;
+   }
+ 
+   protected showVerticalTabsExpandOnHoverSetting_(): boolean {
+--- a/chrome/browser/ui/BUILD.gn
++++ b/chrome/browser/ui/BUILD.gn
+@@ -3557,6 +3557,10 @@
+       "views/frame/vertical_tab_strip_region_view.h",
+       "views/helium/frame_corner_radius.cc",
+       "views/helium/frame_corner_radius.h",
++      "views/helium/helium_address_bar_ipc.cc",
++      "views/helium/helium_address_bar_ipc.h",
++      "views/helium/helium_synergy_controller.cc",
++      "views/helium/helium_synergy_controller.h",
+       "views/helium/native_frame_materials.cc",
+       "views/helium/native_frame_materials.h",
+     ]
+--- a/chrome/browser/ui/browser_ui_prefs.cc
++++ b/chrome/browser/ui/browser_ui_prefs.cc
+@@ -14,6 +14,7 @@
+ #include "chrome/browser/ui/ui_features.h"
+ #include "chrome/browser/upgrade_detector/upgrade_detector.h"
+ #include "chrome/common/buildflags.h"
++#include "chrome/common/helium_synergy_prefs.h"
+ #include "chrome/common/helium_tab_scrub_prefs.h"
+ #include "chrome/common/helium_window_controls_prefs.h"
+ #include "chrome/common/pref_names.h"
+@@ -178,6 +179,8 @@
+   registry->RegisterBooleanPref(helium::kShowWindowCloseButton, true);
+   registry->RegisterBooleanPref(helium::kThreeFingerTabScrub, true);
+   registry->RegisterBooleanPref(helium::kThreeFingerTabScrubInvert, false);
++  registry->RegisterBooleanPref(helium::kSynergyMode, false);
++  registry->RegisterBooleanPref(helium::kSynergyAutohideAddressBar, false);
+   registry->RegisterBooleanPref(prefs::kShowMediaButton, true);
+   registry->RegisterBooleanPref(prefs::kShowVerticalTabsCollapseButton, true);
+   registry->RegisterBooleanPref(prefs::kShowDynamicNewTabButton, true);
+--- a/chrome/browser/ui/views/frame/browser_frame_view_linux.cc
++++ b/chrome/browser/ui/views/frame/browser_frame_view_linux.cc
+@@ -5,6 +5,7 @@
+ #include "chrome/browser/ui/views/frame/browser_frame_view_linux.h"
+ 
+ #include <algorithm>
++#include <utility>
+ 
+ #include "base/functional/bind.h"
+ #include "base/notreached.h"
+@@ -16,7 +17,9 @@
+ #include "chrome/browser/ui/views/frame/browser_view.h"
+ #include "chrome/browser/ui/views/helium/helium_tab_scrubber.h"
+ #include "chrome/browser/ui/views/helium/native_frame_materials.h"
++#include "chrome/common/helium_synergy_prefs.h"
+ #include "chrome/common/helium_window_controls_prefs.h"
++#include "chrome/common/pref_names.h"
+ #include "components/prefs/pref_change_registrar.h"
+ #include "components/prefs/pref_service.h"
+ #include "ui/base/hit_test.h"
+@@ -48,6 +51,25 @@
+              helium::kShowWindowCloseButton);
+ }
+ 
++// Synergy mode removes the toolbar row, so caption buttons on the side away
++// from the vertical tab strip would sit on the web page. They are not shown.
++// Returns whether to drop the buttons on the leading and the trailing edge.
++std::pair<bool, bool> CaptionEdgesHiddenBySynergy(BrowserView* browser_view) {
++  const PrefService* prefs = browser_view->GetProfile()->GetPrefs();
++  const bool synergy =
++      browser_view->browser()->GetType() ==
++          BrowserWindowInterface::TYPE_NORMAL &&
++      prefs->GetBoolean(helium::kSynergyMode) &&
++      prefs->GetInteger(prefs::kHeliumLayout) == 2 /* vertical */ &&
++      !prefs->GetBoolean(prefs::kHeliumZenMode);
++  if (!synergy) {
++    return {false, false};
++  }
++  const bool strip_on_right =
++      prefs->GetBoolean(prefs::kHeliumVerticalRightAligned);
++  return {strip_on_right, !strip_on_right};
++}
++
+ bool HasCaptionButtons(const std::vector<views::FrameButton>& buttons,
+                        BrowserView* browser_view) {
+   const bool show_close = ShouldShowWindowCloseButton(browser_view);
+@@ -67,8 +89,10 @@
+   if (browser_view->browser()->GetType() == BrowserWindowInterface::TYPE_NORMAL) {
+     window_controls_pref_registrar_ = std::make_unique<PrefChangeRegistrar>();
+     window_controls_pref_registrar_->Init(browser_view->GetProfile()->GetPrefs());
+-    window_controls_pref_registrar_->Add(
+-        helium::kShowWindowCloseButton,
++    window_controls_pref_registrar_->AddMultiple(
++        {helium::kShowWindowCloseButton, helium::kSynergyMode,
++         prefs::kHeliumLayout, prefs::kHeliumZenMode,
++         prefs::kHeliumVerticalRightAligned},
+         base::BindRepeating(&BrowserFrameViewLinux::OnWindowButtonOrderingChange,
+                             base::Unretained(this)));
+   }
+@@ -172,6 +196,14 @@
+     std::erase(leading, views::FrameButton::kClose);
+     std::erase(trailing, views::FrameButton::kClose);
+   }
++  const auto [hide_leading, hide_trailing] =
++      CaptionEdgesHiddenBySynergy(GetBrowserView());
++  if (hide_leading) {
++    leading.clear();
++  }
++  if (hide_trailing) {
++    trailing.clear();
++  }
+   layout_->SetButtonOrdering(leading, trailing);
+ 
+   // We can receive OnWindowButtonOrderingChange events before we've been added
+@@ -265,12 +297,14 @@
+ 
+ bool BrowserFrameViewLinux::CaptionButtonsOnLeadingEdge() const {
+   auto* const provider = views::WindowButtonOrderProvider::GetInstance();
+-  return HasCaptionButtons(provider->leading_buttons(), GetBrowserView());
++  return !CaptionEdgesHiddenBySynergy(GetBrowserView()).first &&
++         HasCaptionButtons(provider->leading_buttons(), GetBrowserView());
+ }
+ 
+ bool BrowserFrameViewLinux::CaptionButtonsOnTrailingEdge() const {
+   auto* const provider = views::WindowButtonOrderProvider::GetInstance();
+-  return HasCaptionButtons(provider->trailing_buttons(), GetBrowserView());
++  return !CaptionEdgesHiddenBySynergy(GetBrowserView()).second &&
++         HasCaptionButtons(provider->trailing_buttons(), GetBrowserView());
+ }
+ 
+ BrowserFrameViewLinux::BoundsAndMargins
+--- a/chrome/browser/ui/views/frame/browser_view.cc
++++ b/chrome/browser/ui/views/frame/browser_view.cc
+@@ -188,6 +188,7 @@
+ #include "chrome/browser/ui/views/frame/top_controls_slide_controller.h"
+ #include "chrome/browser/ui/views/frame/vertical_tab_strip_background_blur_backdrop.h"
+ #include "chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h"
++#include "chrome/browser/ui/views/helium/helium_synergy_controller.h"
+ #include "chrome/browser/ui/views/frame/web_contents_close_handler.h"
+ #include "chrome/browser/ui/views/fullscreen_control/fullscreen_control_host.h"
+ #include "chrome/browser/ui/views/glic/glic_button_interface.h"
+@@ -1751,6 +1752,11 @@
+ 
+ void BrowserView::ToggleZenModeTopChrome() {
+   if (!IsZenModeEnabled()) {
++    // Outside Zen mode the same shortcut shows Synergy mode's hidden address
++    // bar.
++    if (auto* synergy = helium::SynergyController::From(browser_)) {
++      synergy->ToggleAddressBarReveal();
++    }
+     return;
+   }
+ 
+@@ -5783,6 +5789,9 @@
+   }
+ 
+   UpdateTabSearchBubbleHost();
++
++  // Helide Synergy mode moves the toolbar into the vertical tab strip.
++  helium::SynergyController::MaybeCreateForBrowserView(this);
+ 
+ #if BUILDFLAG(IS_CHROMEOS)
+   // TopControlsSlideController must be initialized here in AddedToWidget()
+--- a/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
++++ b/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
+@@ -335,7 +335,9 @@
+       // However, if top container elements are not visible (for example,
+       // because they are offscreen), the separator is not shown.
+       info.top_container_separator =
+-          delegate().IsToolbarVisible() || delegate().IsBookmarkBarVisible();
++          (delegate().IsToolbarVisible() &&
++           IsParentedTo(views().toolbar, views().top_container)) ||
++          delegate().IsBookmarkBarVisible();
+       info.side_panel_top_padding = true;
+       break;
+     case WindowState::kFullscreenWithToolbar:
+@@ -799,7 +801,9 @@
+ 
+   const auto& params = layout_data_->revised_params;
+ 
+-  if (delegate().IsToolbarVisible()) {
++  // Helide Synergy mode moves the toolbar into the vertical tab strip.
++  if (delegate().IsToolbarVisible() &&
++      IsParentedTo(views().toolbar, views().top_container)) {
+     return GetBoundsWithExclusion(params, views().toolbar).height();
+   }
+ 
+--- a/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
++++ b/chrome/browser/ui/views/frame/vertical_tab_strip_region_view.cc
+@@ -37,6 +37,7 @@
+ #include "chrome/browser/ui/views/animations/tab_strip_animations.h"
+ #include "chrome/browser/ui/views/frame/base_tab_strip_region_view.h"
+ #include "chrome/browser/ui/views/frame/browser_view.h"
++#include "chrome/browser/ui/views/location_bar/location_bar_view.h"
+ #include "chrome/browser/ui/view_ids.h"
+ #include "chrome/browser/ui/views/frame/custom_corners_background.h"
+ #include "chrome/browser/ui/views/frame/frame_separator.h"
+@@ -1241,6 +1242,12 @@
+ }
+ 
+ void VerticalTabStripRegionView::OnOmniboxPopupVisibilityChanged(bool is_open) {
++  // In Helide Synergy mode the omnibox is in this strip; collapsing the strip
++  // would shrink the omnibox being typed in.
++  if (is_open && browser_view()->GetLocationBarView() &&
++      Contains(browser_view()->GetLocationBarView())) {
++    return;
++  }
+   if (is_open) {
+     if (!omnibox_open_lock_) {
+       omnibox_open_lock_ =
+--- a/chrome/browser/ui/views/location_bar/location_icon_view.cc
++++ b/chrome/browser/ui/views/location_bar/location_icon_view.cc
+@@ -193,6 +193,15 @@
+ }
+ 
+ bool LocationIconView::GetShowText() const {
++  // Helide Synergy mode puts the address bar in the narrow vertical tab strip;
++  // there the security chip is just its icon ("Not secure" and the like are
++  // in the page info bubble and the icon's tooltip).
++  for (const views::View* ancestor = parent(); ancestor;
++       ancestor = ancestor->parent()) {
++    if (ancestor->GetClassName() == "SynergyTopRow") {
++      return false;
++    }
++  }
+   return location_bar::ShouldShowSecurityChipText(
+       delegate_->GetLocationBarModel(), delegate_->GetWebContents(),
+       delegate_->IsEditingOrEmpty());
+--- a/chrome/browser/ui/views/omnibox/omnibox_popup_presenter_base.cc
++++ b/chrome/browser/ui/views/omnibox/omnibox_popup_presenter_base.cc
+@@ -372,6 +372,18 @@
+     widget_bounds.set_height(
+         std::max(minimum_size_.height(), widget_bounds.height()));
+ 
++    // Helide: a narrow address bar (as in Synergy mode, where it sits in the
++    // vertical tab strip) gets a popup wide enough to read the suggestions,
++    // extending over the page but not past the window.
++    constexpr int kHeliumMinimumPopupWidth = 520;
++    if (widget_bounds.width() < kHeliumMinimumPopupWidth &&
++        widget_->parent()) {
++      const gfx::Rect window = widget_->parent()->GetWindowBoundsInScreen();
++      const int available = window.right() - widget_bounds.x();
++      widget_bounds.set_width(std::max(
++          widget_bounds.width(), std::min(kHeliumMinimumPopupWidth, available)));
++    }
++
+     // Expand the widget bounds to accommodate the shadow borders around the
+     // content.
+     widget_bounds.Inset(-RoundedOmniboxResultsFrame::GetShadowInsets());
+--- a/chrome/browser/ui/views/toolbar/toolbar_icon_container_view.cc
++++ b/chrome/browser/ui/views/toolbar/toolbar_icon_container_view.cc
+@@ -249,7 +249,12 @@
+ void ToolbarIconContainerView::OnBoundsChanged(
+     const gfx::Rect& previous_bounds) {
+   const gfx::Rect bounds = GetLocalBounds();
+-  border_.layer()->SetBounds(ConvertRectToWidget(bounds));
++  // The border layer is a sibling of this view's layer, in the same parent
++  // layer: it goes where that layer is. (Widget coordinates are only right
++  // when no ancestor has a layer, unlike in Helide's Synergy mode, where the
++  // toolbar is inside the vertical tab strip.) Views keeps the origin in step
++  // with this view's layer from then on.
++  border_.layer()->SetBounds(gfx::Rect(layer()->bounds().origin(), size()));
+   border_.layer()->SchedulePaint(bounds);
+ }
+ 
+--- a/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
++++ b/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
+@@ -726,6 +726,18 @@
+       "threeFingerTabScrubDescription",
+       u"Swipe up or down with three fingers to glow over tabs and release to "
+       u"switch. Swipe left or right to move between split view panes.");
++  html_source->AddString("synergyMode", u"Synergy mode");
++  html_source->AddString(
++      "synergyModeDescription",
++      u"Move the address bar to the top of the tab strip and the toolbar "
++      u"buttons to its bottom, so web pages use the full window height. Not "
++      u"available in Zen mode.");
++  html_source->AddString("synergyAutohideAddressBar",
++                         u"Hide the address bar while the window is focused");
++  html_source->AddString(
++      "synergyAutohideAddressBarDescription",
++      u"The address bar and the page loading bar show only while another "
++      u"window is focused. Press Ctrl+Shift+L to show the address bar.");
+   html_source->AddString("threeFingerTabScrubInvert",
+                          u"Invert three-finger tab swipe direction");
+   html_source->AddString(
+--- a/chrome/common/BUILD.gn
++++ b/chrome/common/BUILD.gn
+@@ -567,6 +567,7 @@
+     "chrome_paths.h",
+     "chrome_paths_internal.h",
+     "chrome_result_codes.h",
++    "helium_synergy_prefs.h",
+     "helium_tab_scrub_prefs.h",
+     "helium_window_controls_prefs.h",
+     "pref_font_script_names-inl.h",
+--- a/ui/views/bubble/bubble_dialog_delegate_view.cc
++++ b/ui/views/bubble/bubble_dialog_delegate_view.cc
+@@ -1026,6 +1026,23 @@
+                      std::string_view histogram_name,
+                      base::TimeDelta value) const;
+ 
++namespace {
++
++// Helide's Synergy mode puts the address bar and toolbar buttons in the
++// vertical tab strip, at the top and the bottom of the window. Bubbles from
++// them have to turn around to stay in the window.
++bool IsInHeliumSynergyStrip(const View* view) {
++  for (; view; view = view->parent()) {
++    const std::string_view name = view->GetClassName();
++    if (name == "SynergyBottomRow" || name == "SynergyTopRow") {
++      return true;
++    }
++  }
++  return false;
++}
++
++}  // namespace
++
+ gfx::Rect BubbleDialogDelegate::GetBubbleBounds() {
+   // The argument rect has its origin at the bubble's arrow anchor point;
+   // its size is the preferred size of the bubble's client view (this view).
+@@ -1048,6 +1065,14 @@
+     adjust_to_fix_available_bounds = false;
+   }
+ #endif
++
++  // Fitting into the anchor's window works without global coordinates, and
++  // is needed there: Wayland draws such bubbles in subsurfaces of the window,
++  // which the compositor does not move back into view.
++  if (!adjust_to_fix_available_bounds && !anchor_minimized && has_anchor &&
++      use_anchor_window_bounds_ && IsInHeliumSynergyStrip(GetAnchorView())) {
++    adjust_to_fix_available_bounds = true;
++  }
+ 
+   gfx::Rect bounds = GetBubbleFrameView()->GetUpdatedWindowBounds(
+       anchor_rect, arrow(), GetWidget()->client_view()->GetPreferredSize({}),
+--- /dev/null
++++ b/chrome/browser/ui/views/helium/helium_address_bar_ipc.cc
+@@ -0,0 +1,810 @@
++// Copyright 2026 The Helide Authors
++// Use of this source code is governed by the GPL-3.0 license in LICENSE.
++
++#include "chrome/browser/ui/views/helium/helium_address_bar_ipc.h"
++
++#include <errno.h>
++#include <sys/socket.h>
++#include <sys/stat.h>
++#include <sys/types.h>
++#include <sys/un.h>
++#include <unistd.h>
++
++#include <algorithm>
++#include <map>
++#include <optional>
++#include <set>
++#include <string>
++#include <string_view>
++#include <utility>
++#include <vector>
++
++#include "base/environment.h"
++#include "base/files/file_descriptor_watcher_posix.h"
++#include "base/files/file_path.h"
++#include "base/files/scoped_file.h"
++#include "base/functional/bind.h"
++#include "base/json/json_reader.h"
++#include "base/json/json_writer.h"
++#include "base/logging.h"
++#include "base/memory/raw_ptr.h"
++#include "base/memory/weak_ptr.h"
++#include "base/posix/eintr_wrapper.h"
++#include "base/scoped_observation.h"
++#include "base/strings/utf_string_conversions.h"
++#include "base/task/bind_post_task.h"
++#include "base/task/sequenced_task_runner.h"
++#include "base/task/thread_pool.h"
++#include "base/threading/sequence_bound.h"
++#include "base/values.h"
++#include "chrome/app/chrome_command_ids.h"
++#include "chrome/browser/autocomplete/autocomplete_classifier_factory.h"
++#include "chrome/browser/autocomplete/chrome_autocomplete_provider_client.h"
++#include "chrome/browser/autocomplete/chrome_autocomplete_scheme_classifier.h"
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/ui/browser_command_controller.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/omnibox/omnibox_controller.h"
++#include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
++#include "chrome/browser/ui/views/frame/browser_view.h"
++#include "chrome/browser/ui/views/location_bar/location_bar_view.h"
++#include "components/omnibox/browser/autocomplete_classifier.h"
++#include "components/omnibox/browser/autocomplete_controller.h"
++#include "components/omnibox/browser/autocomplete_input.h"
++#include "components/omnibox/browser/autocomplete_match.h"
++#include "components/omnibox/browser/autocomplete_match_type.h"
++#include "components/omnibox/browser/autocomplete_result.h"
++#include "components/sessions/core/session_id.h"
++#include "content/public/browser/navigation_controller.h"
++#include "content/public/browser/navigation_handle.h"
++#include "content/public/browser/web_contents.h"
++#include "content/public/browser/web_contents_observer.h"
++#include "third_party/metrics_proto/omnibox_event.pb.h"
++#include "ui/base/page_transition_types.h"
++#include "ui/views/widget/widget.h"
++#include "ui/views/widget/widget_observer.h"
++#include "url/gurl.h"
++#include "url/url_constants.h"
++
++namespace helium {
++
++namespace {
++
++constexpr char kSocketName[] = "helide-address-bar.sock";
++constexpr int kProtocolVersion = 1;
++// A line longer than this is not a request; the client is dropped.
++constexpr size_t kMaxLineLength = 64 * 1024;
++// A client that reads nothing while this much waits for it is dropped.
++constexpr size_t kMaxPendingOutput = 4 * 1024 * 1024;
++constexpr size_t kMaxSuggestions = 12;
++
++std::optional<base::FilePath> SocketPath() {
++  std::unique_ptr<base::Environment> env = base::Environment::Create();
++  std::optional<std::string> runtime_dir = env->GetVar("XDG_RUNTIME_DIR");
++  if (!runtime_dir || runtime_dir->empty()) {
++    return std::nullopt;
++  }
++  return base::FilePath(*runtime_dir).Append(kSocketName);
++}
++
++// ---------------------------------------------------------------------------
++// The socket itself, on a thread pool sequence. Lines are handed to the UI
++// thread as they arrive; replies come back the same way.
++class SocketIo {
++ public:
++  using LineCallback = base::RepeatingCallback<void(int client, std::string)>;
++  using ClosedCallback = base::RepeatingCallback<void(int client)>;
++
++  SocketIo(base::FilePath path, LineCallback on_line, ClosedCallback on_closed)
++      : path_(std::move(path)),
++        on_line_(std::move(on_line)),
++        on_closed_(std::move(on_closed)) {
++    Listen();
++  }
++  SocketIo(const SocketIo&) = delete;
++  SocketIo& operator=(const SocketIo&) = delete;
++
++  ~SocketIo() {
++    accept_watch_.reset();
++    clients_.clear();
++    if (listen_fd_.is_valid()) {
++      listen_fd_.reset();
++      unlink(path_.value().c_str());
++    }
++  }
++
++  void Send(int client, std::string line) {
++    auto it = clients_.find(client);
++    if (it == clients_.end()) {
++      return;
++    }
++    line.push_back('\n');
++    it->second->out.append(line);
++    Flush(client);
++  }
++
++  void Broadcast(std::vector<int> clients, std::string line) {
++    for (int client : clients) {
++      Send(client, line);
++    }
++  }
++
++ private:
++  struct Client {
++    base::ScopedFD fd;
++    std::string in;
++    std::string out;
++    std::unique_ptr<base::FileDescriptorWatcher::Controller> read_watch;
++    std::unique_ptr<base::FileDescriptorWatcher::Controller> write_watch;
++  };
++
++  static sockaddr_un Address(const base::FilePath& path, bool* ok) {
++    sockaddr_un address = {};
++    address.sun_family = AF_UNIX;
++    *ok = path.value().size() < sizeof(address.sun_path);
++    if (*ok) {
++      std::copy(path.value().begin(), path.value().end(), address.sun_path);
++    }
++    return address;
++  }
++
++  void Listen() {
++    bool ok = false;
++    const sockaddr_un address = Address(path_, &ok);
++    if (!ok) {
++      LOG(ERROR) << "Address bar socket: path too long: " << path_;
++      return;
++    }
++
++    // Another Helide (another profile directory) may own the socket. Only a
++    // socket nobody answers on is taken over.
++    {
++      base::ScopedFD probe(
++          socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, /*protocol=*/0));
++      if (probe.is_valid() &&
++          connect(probe.get(), reinterpret_cast<const sockaddr*>(&address),
++                  sizeof(address)) == 0) {
++        LOG(WARNING) << "Address bar socket: " << path_
++                     << " is in use by another browser; not serving it";
++        return;
++      }
++    }
++    unlink(path_.value().c_str());
++
++    base::ScopedFD fd(socket(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC,
++                             /*protocol=*/0));
++    if (!fd.is_valid()) {
++      PLOG(ERROR) << "Address bar socket: socket";
++      return;
++    }
++    // Only the user may connect, also where the runtime directory is not
++    // private.
++    const mode_t old_mask = umask(0077);
++    const int bound = bind(fd.get(), reinterpret_cast<const sockaddr*>(&address),
++                           sizeof(address));
++    umask(old_mask);
++    if (bound != 0 || listen(fd.get(), /*backlog=*/16) != 0) {
++      PLOG(ERROR) << "Address bar socket: cannot listen on " << path_;
++      return;
++    }
++    listen_fd_ = std::move(fd);
++    accept_watch_ = base::FileDescriptorWatcher::WatchReadable(
++        listen_fd_.get(), base::BindRepeating(&SocketIo::OnAcceptable,
++                                              base::Unretained(this)));
++    VLOG(1) << "Address bar socket: listening on " << path_;
++  }
++
++  void OnAcceptable() {
++    while (true) {
++      base::ScopedFD fd(HANDLE_EINTR(accept4(listen_fd_.get(), nullptr, nullptr,
++                                             SOCK_NONBLOCK | SOCK_CLOEXEC)));
++      if (!fd.is_valid()) {
++        return;
++      }
++      ucred credentials = {};
++      socklen_t length = sizeof(credentials);
++      if (getsockopt(fd.get(), SOL_SOCKET, SO_PEERCRED, &credentials,
++                     &length) != 0 ||
++          credentials.uid != getuid()) {
++        continue;
++      }
++      const int id = next_client_++;
++      auto client = std::make_unique<Client>();
++      client->fd = std::move(fd);
++      client->read_watch = base::FileDescriptorWatcher::WatchReadable(
++          client->fd.get(), base::BindRepeating(&SocketIo::OnReadable,
++                                                base::Unretained(this), id));
++      clients_.emplace(id, std::move(client));
++    }
++  }
++
++  void OnReadable(int id) {
++    auto it = clients_.find(id);
++    if (it == clients_.end()) {
++      return;
++    }
++    Client& client = *it->second;
++    char buffer[16 * 1024];
++    while (true) {
++      const ssize_t n = HANDLE_EINTR(read(client.fd.get(), buffer, sizeof(buffer)));
++      if (n == 0 || (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) {
++        Close(id);
++        return;
++      }
++      if (n < 0) {
++        break;
++      }
++      client.in.append(buffer, static_cast<size_t>(n));
++    }
++    size_t start = 0;
++    for (size_t newline; (newline = client.in.find('\n', start)) !=
++                         std::string::npos;
++         start = newline + 1) {
++      std::string line = client.in.substr(start, newline - start);
++      if (!line.empty() && line.back() == '\r') {
++        line.pop_back();
++      }
++      if (!line.empty()) {
++        on_line_.Run(id, std::move(line));
++      }
++    }
++    client.in.erase(0, start);
++    if (client.in.size() > kMaxLineLength) {
++      Close(id);
++    }
++  }
++
++  void Flush(int id) {
++    auto it = clients_.find(id);
++    if (it == clients_.end()) {
++      return;
++    }
++    Client& client = *it->second;
++    while (!client.out.empty()) {
++      const ssize_t n = HANDLE_EINTR(
++          send(client.fd.get(), client.out.data(), client.out.size(),
++               MSG_NOSIGNAL));
++      if (n < 0) {
++        if (errno != EAGAIN && errno != EWOULDBLOCK) {
++          Close(id);
++          return;
++        }
++        break;
++      }
++      client.out.erase(0, static_cast<size_t>(n));
++    }
++    if (client.out.size() > kMaxPendingOutput) {
++      Close(id);
++      return;
++    }
++    if (client.out.empty()) {
++      client.write_watch.reset();
++    } else if (!client.write_watch) {
++      client.write_watch = base::FileDescriptorWatcher::WatchWritable(
++          client.fd.get(),
++          base::BindRepeating(&SocketIo::Flush, base::Unretained(this), id));
++    }
++  }
++
++  void Close(int id) {
++    if (clients_.erase(id)) {
++      on_closed_.Run(id);
++    }
++  }
++
++  const base::FilePath path_;
++  const LineCallback on_line_;
++  const ClosedCallback on_closed_;
++  base::ScopedFD listen_fd_;
++  std::unique_ptr<base::FileDescriptorWatcher::Controller> accept_watch_;
++  std::map<int, std::unique_ptr<Client>> clients_;
++  int next_client_ = 1;
++};
++
++// ---------------------------------------------------------------------------
++
++base::ListValue SuggestionsToList(const AutocompleteResult& result) {
++  base::ListValue list;
++  for (const AutocompleteMatch& match : result) {
++    if (list.size() >= kMaxSuggestions) {
++      break;
++    }
++    list.Append(
++        base::DictValue()
++            .Set("contents", base::UTF16ToUTF8(match.contents))
++            .Set("description", base::UTF16ToUTF8(match.description))
++            .Set("url", match.destination_url.possibly_invalid_spec())
++            .Set("fill", base::UTF16ToUTF8(match.fill_into_edit))
++            .Set("type", AutocompleteMatchTypeToString(match.type))
++            .Set("default", match.allowed_to_be_default_match));
++  }
++  return list;
++}
++
++class Server;
++
++// One browser window's state, followed for the socket.
++class WindowSource : public AddressBarIpcRegistration,
++                     public TabStripModelObserver,
++                     public content::WebContentsObserver,
++                     public AutocompleteController::Observer,
++                     public views::WidgetObserver {
++ public:
++  explicit WindowSource(BrowserView* browser_view);
++  WindowSource(const WindowSource&) = delete;
++  WindowSource& operator=(const WindowSource&) = delete;
++  ~WindowSource() override;
++
++  int id() const { return id_; }
++  bool focused() const { return widget_ && widget_->IsActive(); }
++  BrowserWindowInterface* browser() const { return browser_; }
++  Profile* profile() const { return browser_->GetProfile(); }
++  content::WebContents* contents() const {
++    return browser_->GetTabStripModel()->GetActiveWebContents();
++  }
++
++  base::DictValue State() const {
++    base::DictValue state;
++    state.Set("event", "state");
++    state.Set("window", id_);
++    state.Set("focused", focused());
++    content::WebContents* const web_contents = contents();
++    if (!web_contents) {
++      return state;
++    }
++    const bool loading = web_contents->IsLoading();
++    state.Set("url", web_contents->GetVisibleURL().possibly_invalid_spec());
++    state.Set("title", base::UTF16ToUTF8(web_contents->GetTitle()));
++    state.Set("loading", loading);
++    state.Set("progress", loading ? progress_ : 1.0);
++    state.Set("can_go_back", web_contents->GetController().CanGoBack());
++    state.Set("can_go_forward", web_contents->GetController().CanGoForward());
++    return state;
++  }
++
++ private:
++  void ObserveActiveTab() {
++    Observe(contents());
++    progress_ = contents() && contents()->IsLoading()
++                    ? contents()->GetLoadProgress()
++                    : 1.0;
++  }
++  void Changed();
++
++  // TabStripModelObserver:
++  void OnTabStripModelChanged(TabStripModel* tab_strip_model,
++                              const TabStripModelChange& change,
++                              const TabStripSelectionChange& selection) override {
++    if (selection.active_tab_changed()) {
++      ObserveActiveTab();
++      Changed();
++    }
++  }
++
++  // content::WebContentsObserver:
++  // The fraction only grows during a load, as the loading bar does; the
++  // contents report a passing 0 as a new document commits.
++  void DidStartLoading() override {
++    progress_ = web_contents()->GetLoadProgress();
++    Changed();
++  }
++  void DidStopLoading() override {
++    progress_ = 1.0;
++    Changed();
++  }
++  void LoadProgressChanged(double progress) override {
++    progress_ = std::max(progress_, progress);
++    Changed();
++  }
++  void TitleWasSet(content::NavigationEntry* entry) override { Changed(); }
++  void DidStartNavigation(content::NavigationHandle* handle) override {
++    if (handle->IsInPrimaryMainFrame()) {
++      Changed();
++    }
++  }
++  void DidFinishNavigation(content::NavigationHandle* handle) override {
++    if (handle->IsInPrimaryMainFrame()) {
++      Changed();
++    }
++  }
++  void WebContentsDestroyed() override { Observe(nullptr); }
++
++  // AutocompleteController::Observer: what is typed in this window's address
++  // bar, and its suggestions.
++  void OnResultChanged(AutocompleteController* controller,
++                       bool default_match_changed) override;
++  void OnControllerDestroying(AutocompleteController* controller) override {
++    autocomplete_observation_.Reset();
++  }
++
++  // views::WidgetObserver:
++  void OnWidgetActivationChanged(views::Widget* widget, bool active) override {
++    Changed();
++  }
++  void OnWidgetDestroying(views::Widget* widget) override {
++    widget_observation_.Reset();
++    widget_ = nullptr;
++  }
++
++  const raw_ptr<BrowserWindowInterface> browser_;
++  const int id_;
++  double progress_ = 1.0;
++  raw_ptr<views::Widget> widget_;
++  base::ScopedObservation<AutocompleteController,
++                          AutocompleteController::Observer>
++      autocomplete_observation_{this};
++  base::ScopedObservation<views::Widget, views::WidgetObserver>
++      widget_observation_{this};
++};
++
++// A suggestion query from a client, answered without the browser's UI.
++class Query : public AutocompleteController::Observer {
++ public:
++  using ResultCallback = base::RepeatingCallback<void(
++      const Query& query,
++      const AutocompleteController& controller)>;
++
++  Query(Profile* profile,
++        int client,
++        base::Value request_id,
++        int window,
++        const std::string& text,
++        ResultCallback on_result)
++      : client_(client),
++        request_id_(std::move(request_id)),
++        window_(window),
++        input_(text),
++        on_result_(std::move(on_result)) {
++    controller_ = std::make_unique<AutocompleteController>(
++        std::make_unique<ChromeAutocompleteProviderClient>(profile),
++        AutocompleteControllerConfig{
++            .provider_types = AutocompleteClassifier::DefaultOmniboxProviders()});
++    controller_->AddObserver(this);
++    controller_->Start(AutocompleteInput(
++        base::UTF8ToUTF16(text), metrics::OmniboxEventProto::OTHER,
++        ChromeAutocompleteSchemeClassifier(profile)));
++  }
++  Query(const Query&) = delete;
++  Query& operator=(const Query&) = delete;
++  ~Query() override { controller_->RemoveObserver(this); }
++
++  int client() const { return client_; }
++  const base::Value& request_id() const { return request_id_; }
++  int window() const { return window_; }
++  const std::string& input() const { return input_; }
++
++ private:
++  // AutocompleteController::Observer:
++  void OnResultChanged(AutocompleteController* controller,
++                       bool default_match_changed) override {
++    on_result_.Run(*this, *controller);
++  }
++
++  const int client_;
++  const base::Value request_id_;
++  const int window_;
++  const std::string input_;
++  const ResultCallback on_result_;
++  std::unique_ptr<AutocompleteController> controller_;
++};
++
++// ---------------------------------------------------------------------------
++// The protocol, on the UI thread. One instance while windows are registered.
++class Server {
++ public:
++  static Server* instance() { return instance_; }
++
++  static void AddWindow(WindowSource* window) {
++    if (!instance_) {
++      std::optional<base::FilePath> path = SocketPath();
++      if (!path) {
++        return;
++      }
++      instance_ = new Server(*path);
++    }
++    instance_->windows_.push_back(window);
++    instance_->BroadcastState(*window);
++  }
++
++  static void RemoveWindow(WindowSource* window) {
++    if (!instance_) {
++      return;
++    }
++    Server* const server = instance_;
++    std::erase(server->windows_, window);
++    std::erase_if(server->queries_, [&](const auto& entry) {
++      return entry.second->window() == window->id();
++    });
++    server->Broadcast(base::DictValue()
++                          .Set("event", "closed")
++                          .Set("window", window->id()));
++    if (server->windows_.empty()) {
++      instance_ = nullptr;
++      delete server;
++    }
++  }
++
++  void BroadcastState(const WindowSource& window) {
++    Broadcast(window.State());
++  }
++
++  void BroadcastAddressBarSuggestions(const WindowSource& window,
++                                      const AutocompleteController& controller) {
++    Broadcast(base::DictValue()
++                  .Set("event", "suggestions")
++                  .Set("source", "address_bar")
++                  .Set("window", window.id())
++                  .Set("input", base::UTF16ToUTF8(controller.input().text()))
++                  .Set("done", controller.done())
++                  .Set("suggestions", SuggestionsToList(controller.result())));
++  }
++
++ private:
++  explicit Server(const base::FilePath& path)
++      : io_(base::ThreadPool::CreateSequencedTaskRunner(
++                {base::MayBlock(), base::TaskPriority::USER_VISIBLE,
++                 base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN}),
++            path,
++            base::BindPostTaskToCurrentDefault(base::BindRepeating(
++                &Server::OnLine, weak_factory_.GetWeakPtr())),
++            base::BindPostTaskToCurrentDefault(base::BindRepeating(
++                &Server::OnClosed, weak_factory_.GetWeakPtr()))) {}
++  ~Server() = default;
++
++  void Send(int client, base::DictValue message) {
++    if (std::optional<std::string> json = base::WriteJson(message)) {
++      io_.AsyncCall(&SocketIo::Send).WithArgs(client, std::move(*json));
++    }
++  }
++
++  void Broadcast(base::DictValue message) {
++    if (subscribers_.empty()) {
++      return;
++    }
++    if (std::optional<std::string> json = base::WriteJson(message)) {
++      io_.AsyncCall(&SocketIo::Broadcast)
++          .WithArgs(std::vector<int>(subscribers_.begin(), subscribers_.end()),
++                    std::move(*json));
++    }
++  }
++
++  void Reply(int client, const base::Value* id, base::DictValue message) {
++    if (id) {
++      message.Set("id", id->Clone());
++    }
++    Send(client, std::move(message));
++  }
++
++  void Error(int client, const base::Value* id, std::string_view error) {
++    Reply(client, id, base::DictValue().Set("ok", false).Set("error", error));
++  }
++
++  // The window a request names, or the focused (else the first) window.
++  WindowSource* FindWindow(const base::DictValue& request) {
++    if (std::optional<int> id = request.FindInt("window")) {
++      for (WindowSource* window : windows_) {
++        if (window->id() == *id) {
++          return window;
++        }
++      }
++      return nullptr;
++    }
++    for (WindowSource* window : windows_) {
++      if (window->focused()) {
++        return window;
++      }
++    }
++    return windows_.empty() ? nullptr : windows_.front().get();
++  }
++
++  void OnClosed(int client) {
++    subscribers_.erase(client);
++    queries_.erase(client);
++  }
++
++  void OnLine(int client, std::string line) {
++    std::optional<base::DictValue> request =
++        base::JSONReader::ReadDict(line, base::JSON_PARSE_RFC);
++    if (!request) {
++      Error(client, nullptr, "not a JSON object");
++      return;
++    }
++    const base::Value* const id = request->Find("id");
++    const std::string* const command = request->FindString("cmd");
++    if (!command) {
++      Error(client, id, "missing cmd");
++      return;
++    }
++
++    if (*command == "hello") {
++      Reply(client, id,
++            base::DictValue().Set("ok", true).Set("version", kProtocolVersion));
++      return;
++    }
++    if (*command == "list") {
++      base::ListValue list;
++      for (WindowSource* window : windows_) {
++        list.Append(window->State());
++      }
++      Reply(client, id,
++            base::DictValue().Set("ok", true).Set("windows", std::move(list)));
++      return;
++    }
++    if (*command == "subscribe") {
++      subscribers_.insert(client);
++      Reply(client, id, base::DictValue().Set("ok", true));
++      for (WindowSource* window : windows_) {
++        Send(client, window->State());
++      }
++      return;
++    }
++    if (*command == "unsubscribe") {
++      subscribers_.erase(client);
++      Reply(client, id, base::DictValue().Set("ok", true));
++      return;
++    }
++
++    WindowSource* const window = FindWindow(*request);
++    if (!window) {
++      Error(client, id, "no such window");
++      return;
++    }
++
++    if (*command == "complete") {
++      const std::string* const text = request->FindString("text");
++      if (!text) {
++        Error(client, id, "missing text");
++        return;
++      }
++      Reply(client, id, base::DictValue().Set("ok", true));
++      // One query per client: a new one replaces the last.
++      queries_.erase(client);
++      queries_.emplace(
++          client, std::make_unique<Query>(
++                      window->profile(), client,
++                      id ? id->Clone() : base::Value(), window->id(), *text,
++                      base::BindRepeating(&Server::OnQueryResult,
++                                          base::Unretained(this))));
++      return;
++    }
++
++    content::WebContents* const contents = window->contents();
++    if (*command == "navigate") {
++      if (!contents) {
++        Error(client, id, "no tab");
++        return;
++      }
++      std::optional<GURL> url = UrlFor(*request, window->profile());
++      if (!url) {
++        Error(client, id, "missing url or text");
++        return;
++      }
++      if (!url->is_valid() || url->SchemeIs(url::kJavaScriptScheme)) {
++        Error(client, id, "not a URL that can be opened");
++        return;
++      }
++      content::NavigationController::LoadURLParams params(*url);
++      params.transition_type = ui::PageTransitionFromInt(
++          ui::PAGE_TRANSITION_TYPED | ui::PAGE_TRANSITION_FROM_ADDRESS_BAR);
++      contents->GetController().LoadURLWithParams(params);
++      Reply(client, id,
++            base::DictValue().Set("ok", true).Set("url", url->spec()));
++      return;
++    }
++
++    static constexpr std::pair<std::string_view, int> kCommands[] = {
++        {"reload", IDC_RELOAD},
++        {"reload_bypassing_cache", IDC_RELOAD_BYPASSING_CACHE},
++        {"stop", IDC_STOP},
++        {"back", IDC_BACK},
++        {"forward", IDC_FORWARD},
++    };
++    for (const auto& [name, command_id] : kCommands) {
++      if (*command == name) {
++        const bool done =
++            chrome::BrowserCommandController::From(window->browser())
++                ->ExecuteCommand(command_id);
++        if (done) {
++          Reply(client, id, base::DictValue().Set("ok", true));
++        } else {
++          Error(client, id, "not available now");
++        }
++        return;
++      }
++    }
++    Error(client, id, "unknown cmd");
++  }
++
++  // "url" is opened as given; "text" is what one would type in the address
++  // bar: a URL, or words to search for.
++  static std::optional<GURL> UrlFor(const base::DictValue& request,
++                                    Profile* profile) {
++    if (const std::string* url = request.FindString("url")) {
++      return GURL(*url);
++    }
++    const std::string* const text = request.FindString("text");
++    if (!text) {
++      return std::nullopt;
++    }
++    AutocompleteMatch match;
++    AutocompleteClassifierFactory::GetForProfile(profile)->Classify(
++        base::UTF8ToUTF16(*text), /*prefer_keyword=*/false,
++        /*allow_exact_keyword_match=*/false,
++        metrics::OmniboxEventProto::OTHER, &match,
++        /*alternate_nav_url=*/nullptr);
++    return match.destination_url;
++  }
++
++  void OnQueryResult(const Query& query,
++                     const AutocompleteController& controller) {
++    base::DictValue message;
++    if (!query.request_id().is_none()) {
++      message.Set("id", query.request_id().Clone());
++    }
++    message.Set("event", "suggestions");
++    message.Set("source", "query");
++    message.Set("window", query.window());
++    message.Set("input", query.input());
++    message.Set("done", controller.done());
++    message.Set("suggestions", SuggestionsToList(controller.result()));
++    Send(query.client(), std::move(message));
++  }
++
++  static inline Server* instance_ = nullptr;
++
++  std::vector<raw_ptr<WindowSource>> windows_;
++  std::set<int> subscribers_;
++  std::map<int, std::unique_ptr<Query>> queries_;
++  base::WeakPtrFactory<Server> weak_factory_{this};
++  // Last, so that it is destroyed (and stops calling back) first.
++  base::SequenceBound<SocketIo> io_;
++};
++
++WindowSource::WindowSource(BrowserView* browser_view)
++    : browser_(browser_view->browser()),
++      id_(browser_view->browser()->GetSessionID().id()),
++      widget_(browser_view->GetWidget()) {
++  browser_->GetTabStripModel()->AddObserver(this);
++  ObserveActiveTab();
++  if (widget_) {
++    widget_observation_.Observe(widget_);
++  }
++  if (LocationBarView* location_bar = browser_view->GetLocationBarView()) {
++    if (OmniboxController* omnibox = location_bar->GetOmniboxController()) {
++      autocomplete_observation_.Observe(omnibox->autocomplete_controller());
++    }
++  }
++  Server::AddWindow(this);
++}
++
++WindowSource::~WindowSource() {
++  Server::RemoveWindow(this);
++  browser_->GetTabStripModel()->RemoveObserver(this);
++}
++
++void WindowSource::Changed() {
++  if (Server* server = Server::instance()) {
++    server->BroadcastState(*this);
++  }
++}
++
++void WindowSource::OnResultChanged(AutocompleteController* controller,
++                                   bool default_match_changed) {
++  if (Server* server = Server::instance()) {
++    server->BroadcastAddressBarSuggestions(*this, *controller);
++  }
++}
++
++}  // namespace
++
++std::unique_ptr<AddressBarIpcRegistration> RegisterWindowForAddressBarIpc(
++    BrowserView* browser_view) {
++  if (!browser_view->GetProfile() ||
++      browser_view->GetProfile()->IsOffTheRecord()) {
++    return nullptr;
++  }
++  return std::make_unique<WindowSource>(browser_view);
++}
++
++}  // namespace helium
+--- /dev/null
++++ b/chrome/browser/ui/views/helium/helium_address_bar_ipc.h
+@@ -0,0 +1,31 @@
++// Copyright 2026 The Helide Authors
++// Use of this source code is governed by the GPL-3.0 license in LICENSE.
++
++#ifndef CHROME_BROWSER_UI_VIEWS_HELIUM_HELIUM_ADDRESS_BAR_IPC_H_
++#define CHROME_BROWSER_UI_VIEWS_HELIUM_HELIUM_ADDRESS_BAR_IPC_H_
++
++#include <memory>
++
++class BrowserView;
++
++namespace helium {
++
++// The address bar socket: other programs running as the user can follow and
++// drive each browser window's address bar over a Unix socket at
++// $XDG_RUNTIME_DIR/helide-address-bar.sock, one JSON object per line. See
++// docs/address-bar-ipc.md for the protocol.
++//
++// A window is on the socket while its registration lives; the socket exists
++// while any window is registered. Synergy mode registers its windows.
++class AddressBarIpcRegistration {
++ public:
++  virtual ~AddressBarIpcRegistration() = default;
++};
++
++// Not for off-the-record windows, which are never reported.
++std::unique_ptr<AddressBarIpcRegistration> RegisterWindowForAddressBarIpc(
++    BrowserView* browser_view);
++
++}  // namespace helium
++
++#endif  // CHROME_BROWSER_UI_VIEWS_HELIUM_HELIUM_ADDRESS_BAR_IPC_H_
+--- /dev/null
++++ b/chrome/browser/ui/views/helium/helium_synergy_controller.cc
+@@ -0,0 +1,786 @@
++// Copyright 2026 The Helide Authors
++// Use of this source code is governed by the GPL-3.0 license in LICENSE.
++
++#include "chrome/browser/ui/views/helium/helium_synergy_controller.h"
++
++#include <algorithm>
++#include <set>
++#include <utility>
++
++#include "base/auto_reset.h"
++#include "base/functional/bind.h"
++#include "base/functional/callback_helpers.h"
++#include "base/location.h"
++#include "base/logging.h"
++#include "base/task/sequenced_task_runner.h"
++#include "base/time/time.h"
++#include "chrome/app/chrome_command_ids.h"
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/ui/browser_command_controller.h"
++#include "chrome/browser/ui/browser_element_identifiers.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/color/chrome_color_id.h"
++#include "chrome/browser/ui/helium/helium_layout_state_controller.h"
++#include "chrome/browser/ui/layout_constants.h"
++#include "chrome/browser/ui/tabs/vertical_tab_strip_state_controller.h"
++#include "chrome/browser/ui/views/frame/browser_view.h"
++#include "chrome/browser/ui/views/frame/custom_corners_background.h"
++#include "chrome/browser/ui/views/frame/tab_strip_region_view.h"
++#include "chrome/browser/ui/views/frame/top_container_view.h"
++#include "chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h"
++#include "chrome/browser/ui/views/helium/helium_address_bar_ipc.h"
++#include "chrome/browser/ui/views/location_bar/location_bar_view.h"
++#include "chrome/browser/ui/views/location_bar/location_icon_view.h"
++#include "chrome/browser/ui/views/tabs/vertical/vertical_tab_strip_bottom_container.h"
++#include "chrome/browser/ui/views/toolbar/toolbar_view.h"
++#include "chrome/common/helium_synergy_prefs.h"
++#include "components/prefs/pref_service.h"
++#include "components/vector_icons/vector_icons.h"
++#include "ui/base/metadata/metadata_header_macros.h"
++#include "ui/base/metadata/metadata_impl_macros.h"
++#include "ui/events/event.h"
++#include "ui/gfx/geometry/point.h"
++#include "ui/gfx/geometry/rect.h"
++#include "ui/gfx/animation/slide_animation.h"
++#include "ui/gfx/animation/tween.h"
++#include "ui/gfx/geometry/size.h"
++#include "ui/compositor/layer.h"
++#include "ui/views/border.h"
++#include "ui/views/accessibility/view_accessibility.h"
++#include "ui/views/controls/button/image_button.h"
++#include "ui/views/controls/button/image_button_factory.h"
++#include "ui/views/controls/webview/webview.h"
++#include "ui/views/interaction/element_tracker_views.h"
++#include "ui/views/layout/flex_layout_types.h"
++#include "ui/views/view_class_properties.h"
++
++namespace helium {
++
++namespace {
++
++// Below this width (a collapsed strip) the address bar becomes an icon and the
++// toolbar shows only the app menu.
++constexpr int kCompactWidth = 120;
++
++// How long the address bar stays after the window is activated, so that the
++// click which activated the window still lands on what the user clicked,
++// instead of on whatever moves up into its place.
++constexpr base::TimeDelta kAutohideDelay = base::Milliseconds(350);
++
++constexpr int kCompactIconSize = 16;
++
++// How long the address bar takes to slide in or out with autohide.
++constexpr base::TimeDelta kRevealDuration = base::Milliseconds(200);
++
++}  // namespace
++
++// The top of the strip: the address bar, or an icon for it when the strip is
++// too narrow. With autohide it slides in and out: its height grows from zero,
++// pushing the tabs down, while the address bar slides down from above and
++// fades in.
++class SynergyTopRow : public views::View, public gfx::AnimationDelegate {
++  METADATA_HEADER(SynergyTopRow, views::View)
++
++ public:
++  SynergyTopRow(SynergyController* controller, const gfx::Insets& padding) {
++    SetBorder(views::CreateEmptyBorder(padding));
++    SetPaintToLayer();
++    layer()->SetFillsBoundsOpaquely(false);
++    layer()->SetMasksToBounds(true);
++
++    icon_ = AddChildView(views::CreateVectorImageButtonWithNativeTheme(
++        base::BindRepeating(&SynergyController::FocusAddressBar,
++                            base::Unretained(controller)),
++        vector_icons::kSearchIcon, kCompactIconSize, kColorToolbarButtonIcon));
++    icon_->SetTooltipText(u"Address bar");
++    icon_->GetViewAccessibility().SetName(u"Address bar");
++    icon_->SetVisible(false);
++
++    reveal_.SetSlideDuration(kRevealDuration);
++    reveal_.SetTweenType(gfx::Tween::EASE_OUT);
++    reveal_.Reset(1.0);
++  }
++  SynergyTopRow(const SynergyTopRow&) = delete;
++  SynergyTopRow& operator=(const SynergyTopRow&) = delete;
++  ~SynergyTopRow() override = default;
++
++  void SetLocationBar(views::View* location_bar) {
++    location_bar_ = location_bar;
++    PreferredSizeChanged();
++  }
++
++  // Whether the address bar is shown, or on its way in.
++  bool shown() const { return reveal_.IsShowing(); }
++
++  void SetShown(bool shown, bool animate) {
++    if (!location_bar_ || (shown == reveal_.IsShowing() &&
++                           (animate || !reveal_.is_animating()))) {
++      return;
++    }
++    if (shown) {
++      // Visible from the start, so that it can take focus right away.
++      location_bar_->SetVisible(true);
++    }
++    if (!animate) {
++      reveal_.Reset(shown ? 1.0 : 0.0);
++      AnimationProgressed(&reveal_);
++      AnimationEnded(&reveal_);
++      return;
++    }
++    if (shown) {
++      reveal_.Show();
++    } else {
++      reveal_.Hide();
++    }
++  }
++
++  // views::View:
++  gfx::Size CalculatePreferredSize(
++      const views::SizeBounds& available_size) const override {
++    if (!location_bar_ || !location_bar_->GetVisible()) {
++      return gfx::Size();
++    }
++    const int full =
++        location_bar_->GetPreferredSize().height() + GetInsets().height();
++    // At least a pixel while it shows: the strip's layout hides empty rows,
++    // and the address bar could not take focus in a hidden row.
++    return gfx::Size(0, std::max(1, gfx::Tween::IntValueBetween(
++                                        reveal_.GetCurrentValue(), 0, full)));
++  }
++
++  void Layout(PassKey) override {
++    const bool compact = width() < kCompactWidth;
++    const bool bar_visible = location_bar_ && location_bar_->GetVisible();
++    icon_->SetVisible(compact && bar_visible);
++
++    // The contents keep their full height and slide down into the row as it
++    // grows.
++    gfx::Rect contents = GetContentsBounds();
++    if (location_bar_) {
++      const int full = location_bar_->GetPreferredSize().height();
++      contents.set_y(height() - GetInsets().bottom() - full);
++      contents.set_height(full);
++      // The address bar stays visible while it is an icon, so that Ctrl+L
++      // still focuses it; focus then expands the strip.
++      location_bar_->SetBoundsRect(compact ? gfx::Rect() : contents);
++    }
++    const gfx::Size icon_size = icon_->GetPreferredSize();
++    icon_->SetBoundsRect(
++        gfx::Rect(contents.x() + (contents.width() - icon_size.width()) / 2,
++                  contents.y() + (contents.height() - icon_size.height()) / 2,
++                  icon_size.width(), icon_size.height()));
++  }
++
++  // gfx::AnimationDelegate:
++  void AnimationProgressed(const gfx::Animation* animation) override {
++    layer()->SetOpacity(static_cast<float>(reveal_.GetCurrentValue()));
++    PreferredSizeChanged();
++  }
++  void AnimationEnded(const gfx::Animation* animation) override {
++    if (location_bar_ && !reveal_.IsShowing()) {
++      location_bar_->SetVisible(false);
++    }
++    PreferredSizeChanged();
++  }
++
++ protected:
++  void ChildPreferredSizeChanged(views::View* child) override {
++    if (child == location_bar_) {
++      PreferredSizeChanged();
++    }
++  }
++  void ChildVisibilityChanged(views::View* child) override {
++    if (child == location_bar_) {
++      PreferredSizeChanged();
++    }
++  }
++
++ private:
++  raw_ptr<views::View> location_bar_ = nullptr;
++  raw_ptr<views::ImageButton> icon_ = nullptr;
++  gfx::SlideAnimation reveal_{this};
++};
++
++BEGIN_METADATA(SynergyTopRow)
++END_METADATA
++
++// The bottom of the strip: the toolbar.
++class SynergyBottomRow : public views::View {
++  METADATA_HEADER(SynergyBottomRow, views::View)
++
++ public:
++  explicit SynergyBottomRow(SynergyController* controller)
++      : controller_(controller) {}
++  SynergyBottomRow(const SynergyBottomRow&) = delete;
++  SynergyBottomRow& operator=(const SynergyBottomRow&) = delete;
++  ~SynergyBottomRow() override = default;
++
++  void SetToolbar(views::View* toolbar) {
++    toolbar_ = toolbar;
++    PreferredSizeChanged();
++  }
++
++  // views::View:
++  gfx::Size CalculatePreferredSize(
++      const views::SizeBounds& available_size) const override {
++    if (!toolbar_ || !toolbar_->GetVisible()) {
++      return gfx::Size();
++    }
++    return gfx::Size(0, toolbar_->GetPreferredSize().height() +
++                            GetInsets().height());
++  }
++
++  void Layout(PassKey) override {
++    const bool compact = width() < kCompactWidth;
++    if (toolbar_) {
++      // A collapsed strip is narrower than the toolbar's margins around the
++      // one button it keeps; let the margins hang over the edges.
++      gfx::Rect bounds = GetContentsBounds();
++      if (compact_) {
++        const int needed = toolbar_->GetPreferredSize().width();
++        if (needed > bounds.width()) {
++          bounds.Inset(gfx::Insets::VH(0, -(needed - bounds.width()) / 2));
++        }
++      }
++      toolbar_->SetBoundsRect(bounds);
++    }
++    if (width() == 0) {
++      return;
++    }
++    if (compact != compact_) {
++      compact_ = compact;
++      // Changing which buttons show relays out the toolbar; not from here.
++      base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
++          FROM_HERE, base::BindOnce(&SynergyBottomRow::NotifyCompactChanged,
++                                    weak_factory_.GetWeakPtr()));
++    }
++  }
++
++ protected:
++  void ChildPreferredSizeChanged(views::View* child) override {
++    if (child == toolbar_) {
++      PreferredSizeChanged();
++    }
++  }
++  void ChildVisibilityChanged(views::View* child) override {
++    if (child == toolbar_) {
++      PreferredSizeChanged();
++    }
++  }
++
++ private:
++  void NotifyCompactChanged() { controller_->OnToolbarCompactChanged(compact_); }
++
++  const raw_ptr<SynergyController> controller_;
++  raw_ptr<views::View> toolbar_ = nullptr;
++  bool compact_ = false;
++  base::WeakPtrFactory<SynergyBottomRow> weak_factory_{this};
++};
++
++BEGIN_METADATA(SynergyBottomRow)
++END_METADATA
++
++DEFINE_USER_DATA(SynergyController);
++
++// static
++void SynergyController::MaybeCreateForBrowserView(BrowserView* browser_view) {
++  if (!browser_view->GetIsNormalType() || !browser_view->GetWidget() ||
++      !browser_view->toolbar() || From(browser_view->browser())) {
++    return;
++  }
++  // Owned by itself; see OnWidgetDestroying().
++  new SynergyController(browser_view);
++}
++
++// static
++SynergyController* SynergyController::From(BrowserWindowInterface* browser) {
++  return Get(browser->GetUnownedUserDataHost());
++}
++
++SynergyController::SynergyController(BrowserView* browser_view)
++    : browser_view_(browser_view), widget_(browser_view->GetWidget()) {
++  BrowserWindowInterface* const browser = browser_view_->browser();
++  scoped_unowned_user_data_.emplace(browser->GetUnownedUserDataHost(), *this);
++
++  pref_change_registrar_.Init(browser_view_->GetProfile()->GetPrefs());
++  pref_change_registrar_.AddMultiple(
++      {kSynergyMode, kSynergyAutohideAddressBar},
++      base::BindRepeating(&SynergyController::ScheduleUpdate,
++                          base::Unretained(this)));
++
++  if (auto* layout_controller = HeliumLayoutStateController::From(browser)) {
++    layout_subscription_ = layout_controller->RegisterOnStateChanged(
++        base::IgnoreArgs<HeliumLayoutStateController*>(base::BindRepeating(
++            &SynergyController::ScheduleUpdate, base::Unretained(this))));
++  }
++  if (auto* vertical = tabs::VerticalTabStripStateController::From(browser)) {
++    vertical_mode_subscription_ = vertical->RegisterOnModeChanged(
++        base::IgnoreArgs<tabs::VerticalTabStripStateController*>(
++            base::BindRepeating(&SynergyController::ScheduleUpdate,
++                                base::Unretained(this))));
++  }
++
++  widget_observation_.Observe(widget_);
++  paint_as_active_subscription_ =
++      widget_->RegisterPaintAsActiveChangedCallback(
++          base::BindRepeating(&SynergyController::OnPaintAsActiveChanged,
++                              base::Unretained(this)));
++  click_monitor_ = views::EventMonitor::CreateWindowMonitor(
++      this, widget_->GetNativeWindow(),
++      {ui::EventType::kMousePressed, ui::EventType::kGestureTap});
++  focus_manager_ = widget_->GetFocusManager();
++  if (focus_manager_) {
++    focus_manager_->AddFocusChangeListener(this);
++  }
++
++  ScheduleUpdate();
++}
++
++SynergyController::~SynergyController() = default;
++
++bool SynergyController::ToggleAddressBarReveal() {
++  if (!active_ || !AutohideEnabled() || !location_bar()) {
++    return false;
++  }
++
++  const bool shown_while_focused =
++      widget_->ShouldPaintAsActive() &&
++      (revealed_ || autohide_delay_timer_.IsRunning());
++  if (shown_while_focused) {
++    revealed_ = false;
++    autohide_delay_timer_.Stop();
++    if (FocusIsInAddressBar()) {
++      if (views::WebView* contents = browser_view_->GetActiveContentsWebView()) {
++        contents->RequestFocus();
++      }
++    }
++    UpdateAddressBarVisibility();
++    return true;
++  }
++
++  revealed_ = true;
++  autohide_delay_timer_.Stop();
++  UpdateAddressBarVisibility();
++  // The row holding the address bar is hidden by the strip's layout while it
++  // is empty; lay out now so that the address bar can take focus.
++  widget_->LayoutRootViewIfNecessary();
++  FocusAddressBar();
++  return true;
++}
++
++void SynergyController::FocusAddressBar() {
++  browser_view_->SetFocusToLocationBar(/*is_user_initiated=*/true);
++  VLOG(1) << "Synergy: focus address bar, focused=" << FocusIsInAddressBar()
++          << " drawn=" << (location_bar() && location_bar()->IsDrawn());
++}
++
++void SynergyController::OnToolbarCompactChanged(bool compact) {
++  if (toolbar_compact_ == compact) {
++    return;
++  }
++  toolbar_compact_ = compact;
++  UpdateToolbarButtons();
++}
++
++void SynergyController::OnWidgetDestroying(views::Widget* widget) {
++  Teardown();
++  delete this;
++}
++
++void SynergyController::OnViewVisibilityChanged(views::View* observed_view,
++                                                views::View* starting_view,
++                                                bool visible) {
++  if (changing_visibility_ || observed_view != starting_view) {
++    return;
++  }
++  auto it = hidden_.find(observed_view);
++  if (it == hidden_.end()) {
++    return;
++  }
++  // Something else changed a button Synergy mode hides. Remember what it
++  // wanted, for when the mode ends, and hide the button again.
++  it->second = visible;
++  if (visible) {
++    ScheduleUpdate();
++  }
++}
++
++void SynergyController::OnChildViewAdded(views::View* observed_view,
++                                         views::View* child) {
++  if (observed_view == toolbar()) {
++    ScheduleUpdate();
++  }
++}
++
++void SynergyController::OnViewIsDeleting(views::View* observed_view) {
++  if (toolbar_observation_.IsObservingSource(observed_view)) {
++    toolbar_observation_.Reset();
++  }
++  if (hidden_observations_.IsObservingSource(observed_view)) {
++    hidden_observations_.RemoveObservation(observed_view);
++    hidden_.erase(observed_view);
++  }
++}
++
++void SynergyController::OnDidChangeFocus(views::View* focused_before,
++                                         views::View* focused_now) {
++  VLOG(1) << "Synergy: focus "
++          << (focused_before ? focused_before->GetClassName() : "null") << " -> "
++          << (focused_now ? focused_now->GetClassName() : "null");
++  // Focus becomes null when the window, or the address bar's own popup, is
++  // activated. That is not leaving the address bar.
++  if (!active_ || !focused_now || !location_bar()) {
++    return;
++  }
++  if (location_bar()->Contains(focused_now)) {
++    if (!expand_lock_ && region()) {
++      expand_lock_ =
++          region()->GetExpandOnHoverLock(ExpandOnHoverLockType::kKeepExpanded);
++    }
++    return;
++  }
++  expand_lock_.reset();
++  if (revealed_) {
++    revealed_ = false;
++    UpdateAddressBarVisibility();
++  }
++}
++
++void SynergyController::ScheduleUpdate() {
++  if (update_pending_) {
++    return;
++  }
++  update_pending_ = true;
++  // Prefs and layout state change in the middle of other updates and layouts;
++  // moving views around is done afterwards.
++  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
++      FROM_HERE, base::BindOnce(&SynergyController::Update,
++                                weak_factory_.GetWeakPtr()));
++}
++
++void SynergyController::Update() {
++  update_pending_ = false;
++  if (!browser_view_) {
++    return;
++  }
++  VLOG(1) << "Synergy: update, active=" << active_;
++
++  const bool should_be_active = ShouldBeActive();
++  if (should_be_active != active_) {
++    if (should_be_active) {
++      Activate();
++    } else {
++      Deactivate();
++    }
++  }
++  UpdateAddressBarVisibility();
++  UpdateToolbarButtons();
++
++  // The address bar socket comes with Synergy mode.
++  const bool ipc = browser_view_->GetProfile()->GetPrefs()->GetBoolean(
++      kSynergyMode);
++  if (ipc && !ipc_registration_) {
++    ipc_registration_ = RegisterWindowForAddressBarIpc(browser_view_);
++  } else if (!ipc) {
++    ipc_registration_.reset();
++  }
++
++  // Ctrl+Shift+L pins the top chrome in Zen mode, and reveals the address bar
++  // with Synergy autohide.
++  chrome::BrowserCommandController::From(browser_view_->browser())
++      ->UpdateCommandEnabled(
++          IDC_TOGGLE_ZEN_MODE_TOP_CHROME_PIN,
++          browser_view_->IsZenModeEnabledForLayout() ||
++              (active_ && AutohideEnabled()));
++}
++
++bool SynergyController::ShouldBeActive() const {
++  BrowserWindowInterface* const browser = browser_view_->browser();
++  const auto* vertical = tabs::VerticalTabStripStateController::From(browser);
++  VerticalTabStripRegionView* const strip = region();
++  return browser_view_->GetProfile()->GetPrefs()->GetBoolean(kSynergyMode) &&
++         vertical && vertical->ShouldDisplayVerticalTabs() &&
++         browser_view_->GetSupportsTabStrip() &&
++         !browser_view_->IsZenModeEnabledForLayout() && toolbar() &&
++         location_bar() && strip && strip->GetBottomContainer();
++}
++
++bool SynergyController::AutohideEnabled() const {
++  return browser_view_->GetProfile()->GetPrefs()->GetBoolean(
++      kSynergyAutohideAddressBar);
++}
++
++void SynergyController::Activate() {
++  ToolbarView* const toolbar_view = toolbar();
++  LocationBarView* const location_bar_view = location_bar();
++  views::View* const top_container = browser_view_->top_container();
++  views::View* const content =
++      region()->GetBottomContainer() ? region()->GetBottomContainer()->parent()
++                                     : nullptr;
++  if (!content || location_bar_view->parent() != toolbar_view ||
++      toolbar_view->parent() != top_container) {
++    return;
++  }
++
++  location_bar_index_ = toolbar_view->GetIndexOf(location_bar_view).value();
++  toolbar_index_ = top_container->GetIndexOf(toolbar_view).value();
++
++  leading_views_.clear();
++  for (size_t i = 0; i < location_bar_index_; ++i) {
++    leading_views_.push_back(
++        std::make_unique<views::ViewTracker>(toolbar_view->children()[i]));
++  }
++
++  const int padding =
++      GetLayoutConstant(LayoutConstant::kVerticalTabStripHorizontalPadding);
++
++  // The padding is inside the row, so that it goes away with the address bar.
++  top_row_ = content->AddChildViewAt(
++      std::make_unique<SynergyTopRow>(
++          this, gfx::Insets::TLBR(padding, padding, 0, padding)),
++      0);
++  top_row_->AddChildView(location_bar_view);
++  top_row_->SetLocationBar(location_bar_view);
++
++  auto bottom_row = std::make_unique<SynergyBottomRow>(this);
++  // Room below the buttons for the outline around the extension icons.
++  bottom_row->SetBorder(
++      views::CreateEmptyBorder(gfx::Insets::TLBR(0, 0, padding / 2, 0)));
++  bottom_row_ = content->AddChildView(std::move(bottom_row));
++  bottom_row_->AddChildView(toolbar_view);
++  bottom_row_->SetToolbar(toolbar_view);
++
++  // The strip's background shows through.
++  if (auto* background =
++          static_cast<CustomCornersBackground*>(toolbar_view->background())) {
++    background->SetVisible(false);
++  }
++  toolbar_observation_.Observe(toolbar_view);
++
++  active_ = true;
++  toolbar_compact_ = false;
++  // The security chip drops its text in the strip; see LocationIconView.
++  location_bar_view->location_icon_view()->Update(
++        /*suppress_animations=*/true, /*force_hide_background=*/false);
++  content->InvalidateLayout();
++  browser_view_->InvalidateLayout();
++}
++
++void SynergyController::Deactivate() {
++  if (!active_) {
++    return;
++  }
++  active_ = false;
++  revealed_ = false;
++  autohide_delay_timer_.Stop();
++  expand_lock_.reset();
++
++  // Puts the hidden toolbar buttons back.
++  UpdateToolbarButtons();
++  leading_views_.clear();
++  toolbar_observation_.Reset();
++
++  ToolbarView* const toolbar_view = toolbar();
++  LocationBarView* const location_bar_view = location_bar();
++  views::View* const top_container = browser_view_->top_container();
++  if (toolbar_view) {
++    if (auto* background = static_cast<CustomCornersBackground*>(
++            toolbar_view->background())) {
++      background->SetVisible(true);
++    }
++    top_container->AddChildViewAt(
++        toolbar_view,
++        std::min(toolbar_index_, top_container->children().size()));
++  }
++  if (toolbar_view && location_bar_view) {
++    location_bar_view->SetVisible(true);
++    toolbar_view->AddChildViewAt(
++        location_bar_view,
++        std::min(location_bar_index_, toolbar_view->children().size()));
++    location_bar_view->location_icon_view()->Update(
++        /*suppress_animations=*/true, /*force_hide_background=*/false);
++  }
++
++  // The rows are empty now; remove them.
++  if (top_row_) {
++    views::View* const parent = top_row_->parent();
++    SynergyTopRow* const row = top_row_;
++    row->SetLocationBar(nullptr);
++    top_row_ = nullptr;
++    parent->RemoveChildViewT(row);
++    parent->InvalidateLayout();
++  }
++  if (bottom_row_) {
++    views::View* const parent = bottom_row_->parent();
++    SynergyBottomRow* const row = bottom_row_;
++    bottom_row_ = nullptr;
++    parent->RemoveChildViewT(row);
++  }
++
++  if (toolbar_view) {
++    toolbar_view->InvalidateLayout();
++  }
++  browser_view_->InvalidateLayout();
++}
++
++void SynergyController::UpdateAddressBarVisibility() {
++  LocationBarView* const location_bar_view = location_bar();
++  if (!active_ || !location_bar_view) {
++    return;
++  }
++  const bool hide = AutohideEnabled() && widget_->ShouldPaintAsActive() &&
++                    !revealed_ && !autohide_delay_timer_.IsRunning();
++  if (!top_row_ || top_row_->shown() == !hide) {
++    return;
++  }
++  if (hide && FocusIsInAddressBar()) {
++    // Hiding a focused view would pass focus to the next view in the strip.
++    if (views::WebView* contents = browser_view_->GetActiveContentsWebView()) {
++      contents->RequestFocus();
++    }
++  }
++  top_row_->SetShown(!hide, /*animate=*/true);
++}
++
++void SynergyController::UpdateToolbarButtons() {
++  std::set<views::View*> should_hide;
++  ToolbarView* const toolbar_view = toolbar();
++  if (active_ && toolbar_view) {
++    for (const auto& tracker : leading_views_) {
++      if (tracker->view() && tracker->view()->parent() == toolbar_view) {
++        should_hide.insert(tracker->view());
++      }
++    }
++    for (views::View* child : toolbar_view->children()) {
++      const ui::ElementIdentifier id =
++          child->GetProperty(views::kElementIdentifierKey);
++      // The collapse button lives right of the menu with a right-aligned strip.
++      // The overflow button belongs to the toolbar's own layout.
++      if (id == kToolbarOverflowButtonElementId) {
++        continue;
++      }
++      if (id == kToolbarVerticalTabsCollapseButtonElementId ||
++          id == kToolbarDynamicNewTabButtonElementId ||
++          (toolbar_compact_ && id != kToolbarAppMenuButtonElementId)) {
++        should_hide.insert(child);
++      }
++    }
++  }
++
++  std::vector<views::View*> to_show;
++  for (const auto& [view, wanted] : hidden_) {
++    if (!should_hide.contains(view)) {
++      to_show.push_back(view);
++    }
++  }
++  for (views::View* view : to_show) {
++    SetHidden(view, false);
++  }
++  for (views::View* view : should_hide) {
++    SetHidden(view, true);
++  }
++}
++
++void SynergyController::SetHidden(views::View* view, bool hidden) {
++  base::AutoReset<bool> changing(&changing_visibility_, true);
++  auto it = hidden_.find(view);
++  if (!hidden) {
++    if (it == hidden_.end()) {
++      return;
++    }
++    const bool wanted = it->second;
++    hidden_.erase(it);
++    hidden_observations_.RemoveObservation(view);
++    view->SetVisible(wanted);
++    return;
++  }
++  if (it == hidden_.end()) {
++    hidden_.emplace(view, view->GetVisible());
++    hidden_observations_.AddObservation(view);
++  }
++  if (view->GetVisible()) {
++    view->SetVisible(false);
++  }
++}
++
++void SynergyController::OnPaintAsActiveChanged() {
++  if (!active_) {
++    return;
++  }
++  if (widget_->ShouldPaintAsActive()) {
++    if (AutohideEnabled() && location_bar() && location_bar()->GetVisible()) {
++      autohide_delay_timer_.Start(
++          FROM_HERE, kAutohideDelay,
++          base::BindOnce(&SynergyController::OnAutohideDelayElapsed,
++                         base::Unretained(this)));
++    }
++  } else {
++    autohide_delay_timer_.Stop();
++  }
++  UpdateAddressBarVisibility();
++}
++
++void SynergyController::OnAutohideDelayElapsed() {
++  UpdateAddressBarVisibility();
++}
++
++void SynergyController::OnEvent(const ui::Event& event) {
++  // A click on the address bar while it shows (as when it activates the
++  // window) keeps it until focus leaves it.
++  LocationBarView* const location_bar_view = location_bar();
++  if (!active_ || !event.IsLocatedEvent() || !location_bar_view ||
++      !location_bar_view->IsDrawn()) {
++    return;
++  }
++  const gfx::Point point = event.AsLocatedEvent()->root_location();
++  gfx::Point in_bar = point;
++  views::View::ConvertPointFromWidget(location_bar_view, &in_bar);
++  if (location_bar_view->HitTestPoint(in_bar)) {
++    revealed_ = true;
++  }
++}
++
++bool SynergyController::FocusIsInAddressBar() const {
++  const views::View* const focused =
++      focus_manager_ ? focus_manager_->GetFocusedView() : nullptr;
++  return focused && location_bar() && location_bar()->Contains(focused);
++}
++
++void SynergyController::Teardown() {
++  weak_factory_.InvalidateWeakPtrs();
++  update_pending_ = false;
++  ipc_registration_.reset();
++  // Put the views back where the rest of the browser view expects them while
++  // it is still whole.
++  Deactivate();
++  hidden_observations_.RemoveAllObservations();
++  hidden_.clear();
++  if (focus_manager_) {
++    focus_manager_->RemoveFocusChangeListener(this);
++    focus_manager_ = nullptr;
++  }
++  click_monitor_.reset();
++  paint_as_active_subscription_ = {};
++  layout_subscription_ = {};
++  vertical_mode_subscription_ = {};
++  pref_change_registrar_.RemoveAll();
++  widget_observation_.Reset();
++  scoped_unowned_user_data_.reset();
++  browser_view_ = nullptr;
++  widget_ = nullptr;
++}
++
++VerticalTabStripRegionView* SynergyController::region() const {
++  return browser_view_ ? browser_view_->vertical_tab_strip_region_view_for_testing()
++                       : nullptr;
++}
++
++ToolbarView* SynergyController::toolbar() const {
++  return browser_view_ ? browser_view_->toolbar() : nullptr;
++}
++
++LocationBarView* SynergyController::location_bar() const {
++  return browser_view_ ? browser_view_->GetLocationBarView() : nullptr;
++}
++
++}  // namespace helium
+--- /dev/null
++++ b/chrome/browser/ui/views/helium/helium_synergy_controller.h
+@@ -0,0 +1,180 @@
++// Copyright 2026 The Helide Authors
++// Use of this source code is governed by the GPL-3.0 license in LICENSE.
++
++#ifndef CHROME_BROWSER_UI_VIEWS_HELIUM_HELIUM_SYNERGY_CONTROLLER_H_
++#define CHROME_BROWSER_UI_VIEWS_HELIUM_HELIUM_SYNERGY_CONTROLLER_H_
++
++#include <cstddef>
++#include <map>
++#include <memory>
++#include <optional>
++#include <vector>
++
++#include "base/callback_list.h"
++#include "base/memory/raw_ptr.h"
++#include "base/memory/weak_ptr.h"
++#include "base/scoped_multi_source_observation.h"
++#include "base/scoped_observation.h"
++#include "base/timer/timer.h"
++#include "components/prefs/pref_change_registrar.h"
++#include "ui/events/event_observer.h"
++#include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
++#include "ui/views/event_monitor.h"
++#include "ui/views/focus/focus_manager.h"
++#include "ui/views/view.h"
++#include "ui/views/view_observer.h"
++#include "ui/views/view_tracker.h"
++#include "ui/views/widget/widget.h"
++#include "ui/views/widget/widget_observer.h"
++
++class BrowserView;
++class BrowserWindowInterface;
++class ExpandOnHoverLock;
++class LocationBarView;
++class ToolbarView;
++class VerticalTabStripRegionView;
++
++namespace helium {
++
++class AddressBarIpcRegistration;
++class SynergyBottomRow;
++class SynergyTopRow;
++
++// Synergy mode, for the vertical tab layout. The toolbar row goes away: the
++// address bar moves to the top of the vertical tab strip, the toolbar (without
++// its navigation buttons) to the bottom of it, and the web contents take the
++// height the toolbar used. When the strip is collapsed, the address bar becomes
++// an icon and the toolbar shows only the app menu.
++//
++// With autohide on, the address bar (and the loading bar inside it) is hidden
++// while the window is focused. Ctrl+L then does nothing; Ctrl+Shift+L shows it
++// until focus leaves it.
++//
++// The views are moved, not copied, so everything that finds them through the
++// toolbar keeps working. They are moved back when the mode is turned off, and
++// before the window's views are torn down.
++class SynergyController : public views::WidgetObserver,
++                          public views::ViewObserver,
++                          public views::FocusChangeListener,
++                          public ui::EventObserver {
++ public:
++  DECLARE_USER_DATA(SynergyController);
++
++  // Creates the controller for a normal browser window. It deletes itself
++  // when the window's widget is destroyed.
++  static void MaybeCreateForBrowserView(BrowserView* browser_view);
++  static SynergyController* From(BrowserWindowInterface* browser);
++
++  SynergyController(const SynergyController&) = delete;
++  SynergyController& operator=(const SynergyController&) = delete;
++
++  // Ctrl+Shift+L. Shows and focuses the auto-hidden address bar, or hides it
++  // again. Does nothing (and returns false) unless autohide is in effect.
++  bool ToggleAddressBarReveal();
++
++  bool active() const { return active_; }
++
++  // Called by the rows.
++  void FocusAddressBar();
++  void OnToolbarCompactChanged(bool compact);
++
++ private:
++  explicit SynergyController(BrowserView* browser_view);
++  ~SynergyController() override;
++
++  // views::WidgetObserver:
++  void OnWidgetDestroying(views::Widget* widget) override;
++
++  // views::ViewObserver:
++  void OnViewVisibilityChanged(views::View* observed_view,
++                               views::View* starting_view,
++                               bool visible) override;
++  void OnChildViewAdded(views::View* observed_view,
++                        views::View* child) override;
++  void OnViewIsDeleting(views::View* observed_view) override;
++
++  // views::FocusChangeListener:
++  void OnWillChangeFocus(views::View* focused_before,
++                         views::View* focused_now) override {}
++  void OnDidChangeFocus(views::View* focused_before,
++                        views::View* focused_now) override;
++
++  // ui::EventObserver:
++  void OnEvent(const ui::Event& event) override;
++
++  void ScheduleUpdate();
++  void Update();
++  bool ShouldBeActive() const;
++  bool AutohideEnabled() const;
++  void Activate();
++  void Deactivate();
++  void UpdateAddressBarVisibility();
++  void UpdateToolbarButtons();
++  void SetHidden(views::View* view, bool hidden);
++  void OnPaintAsActiveChanged();
++  void OnAutohideDelayElapsed();
++  bool FocusIsInAddressBar() const;
++  void Teardown();
++
++  VerticalTabStripRegionView* region() const;
++  ToolbarView* toolbar() const;
++  LocationBarView* location_bar() const;
++
++  raw_ptr<BrowserView> browser_view_;
++  raw_ptr<views::Widget> widget_;
++  std::optional<ui::ScopedUnownedUserData<SynergyController>>
++      scoped_unowned_user_data_;
++
++  PrefChangeRegistrar pref_change_registrar_;
++  base::CallbackListSubscription layout_subscription_;
++  base::CallbackListSubscription vertical_mode_subscription_;
++  base::CallbackListSubscription paint_as_active_subscription_;
++  base::ScopedObservation<views::Widget, views::WidgetObserver>
++      widget_observation_{this};
++  raw_ptr<views::FocusManager> focus_manager_ = nullptr;
++
++  bool active_ = false;
++  bool update_pending_ = false;
++
++  // Where the toolbar and the location bar were before they were moved.
++  size_t toolbar_index_ = 0;
++  size_t location_bar_index_ = 0;
++
++  // The rows in the vertical tab strip that hold them.
++  raw_ptr<SynergyTopRow> top_row_ = nullptr;
++  raw_ptr<SynergyBottomRow> bottom_row_ = nullptr;
++
++  // Toolbar buttons left of the address bar (back, forward, reload, home...),
++  // which Synergy mode does not show.
++  std::vector<std::unique_ptr<views::ViewTracker>> leading_views_;
++  base::ScopedObservation<views::View, views::ViewObserver>
++      toolbar_observation_{this};
++
++  // Toolbar children hidden by Synergy mode, and whether they would be visible
++  // without it, so they can be put back as they were.
++  std::map<views::View*, bool> hidden_;
++  base::ScopedMultiSourceObservation<views::View, views::ViewObserver>
++      hidden_observations_{this};
++  bool changing_visibility_ = false;
++
++  bool toolbar_compact_ = false;
++
++  // Autohide: the address bar was asked for with Ctrl+Shift+L, or clicked
++  // while it showed, and stays until focus leaves it.
++  bool revealed_ = false;
++  base::OneShotTimer autohide_delay_timer_;
++  // Watches for clicks on the address bar.
++  std::unique_ptr<views::EventMonitor> click_monitor_;
++
++  // The window on the address bar socket, while Synergy mode is on.
++  std::unique_ptr<AddressBarIpcRegistration> ipc_registration_;
++
++  // Keeps a collapsed strip expanded while the address bar has focus.
++  std::unique_ptr<ExpandOnHoverLock> expand_lock_;
++
++  base::WeakPtrFactory<SynergyController> weak_factory_{this};
++};
++
++}  // namespace helium
++
++#endif  // CHROME_BROWSER_UI_VIEWS_HELIUM_HELIUM_SYNERGY_CONTROLLER_H_
+--- /dev/null
++++ b/chrome/common/helium_synergy_prefs.h
+@@ -0,0 +1,23 @@
++// Copyright 2026 The Helide Authors
++// Use of this source code is governed by the GPL-3.0 license in LICENSE.
++
++#ifndef CHROME_COMMON_HELIUM_SYNERGY_PREFS_H_
++#define CHROME_COMMON_HELIUM_SYNERGY_PREFS_H_
++
++namespace helium {
++
++// Linux only. A boolean pref, off by default. With the vertical tab layout,
++// Synergy mode removes the toolbar row: the address bar moves to the top of
++// the vertical tab strip, the toolbar buttons to its bottom, and the web
++// contents grow into the space the toolbar used.
++inline constexpr char kSynergyMode[] = "helium.browser.synergy_mode";
++
++// Linux only. A boolean pref, off by default. In Synergy mode, hides the
++// address bar (and with it the page loading bar) while the window is focused.
++// Ctrl+Shift+L shows it.
++inline constexpr char kSynergyAutohideAddressBar[] =
++    "helium.browser.synergy_autohide_address_bar";
++
++}  // namespace helium
++
++#endif  // CHROME_COMMON_HELIUM_SYNERGY_PREFS_H_

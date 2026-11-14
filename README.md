@@ -50,6 +50,14 @@ Swipe through history with a fluid page stack: the page moves with your fingers 
 
 Slide three fingers up or down to glow over the tabs, then lift to switch. The glow follows your fingers continuously and the page stays put until you lift. Swipe sideways to move between split view panes. [How it works and how to set it up](#switch-tabs-with-three-finger-swipes).
 
+### Synergy mode
+
+<p align="center">
+  <img src="docs/illustrations/synergy.svg" alt="The address bar moves into the top of the vertical tab strip, the toolbar buttons to its bottom, and the page grows into the toolbar row's space." width="720">
+</p>
+
+With vertical tabs, the toolbar row folds into the tab strip: the address bar at its top, the buttons at its bottom, and the page gets the full window height. The address bar can also hide while you work in the window. Other programs can follow and drive the address bar through a local socket. [Synergy mode](#synergy-mode-1) and [the address bar socket](docs/address-bar-ipc.md).
+
 ### Linux-aware Energy Saver
 
 <p align="center">
@@ -148,6 +156,10 @@ The Linux patch is [`patches/helium/linux/wayland-frame-opacity.patch`](patches/
 - Switches tabs with continuous three-finger swipes, in
   [`linux-three-finger-tab-scrub.patch`](patches/helium/linux/linux-three-finger-tab-scrub.patch).
   See [Switch tabs with three-finger swipes](#switch-tabs-with-three-finger-swipes).
+- Folds the toolbar row into the vertical tab strip with
+  [Synergy mode](#synergy-mode-1), and serves
+  [the address bar socket](docs/address-bar-ipc.md) with it, in
+  [`linux-synergy-mode.patch`](patches/helium/linux/linux-synergy-mode.patch).
 - Lets AI agents and other automation control the browser without taking it
   over, in
   [`helium-agent-access.patch`](patches/helium/linux/helium-agent-access.patch),
@@ -244,6 +256,7 @@ python3 scripts/check-frame-opacity-patch.py --patch helium/linux/helium-target-
 python3 scripts/check-frame-opacity-patch.py --patch helium/linux/helide-branding.patch
 python3 scripts/check-frame-opacity-patch.py --patch helium/linux/linux-window-close-toggle.patch
 python3 scripts/check-frame-opacity-patch.py --patch helium/linux/linux-three-finger-tab-scrub.patch
+python3 scripts/check-frame-opacity-patch.py --patch helium/linux/linux-synergy-mode.patch
 ```
 
 To turn edits made in `build/src` into a patch against the pinned upstream
@@ -449,6 +462,44 @@ scripts/test-tab-scrub-model.sh                # the scrubbing math on its own
 ```
 
 The end-to-end test covers vertical scrubbing, the continuous glow, commit on lift, the ends of the strip, cancelled and tiny swipes, two-finger swipes being left to the page, the setting being off, and the inverted direction. It does not cover split view panes: those need a real split view, which the test cannot create yet.
+
+## Synergy mode
+
+With the vertical tab layout, turn on **Settings → Appearance → Layout → Synergy mode**.
+
+- **Layout:** the toolbar row goes away. The address bar sits at the top of the tab strip and the toolbar buttons (extensions, downloads, profile, menu) at its bottom. The page takes the height the toolbar row used. Back, forward, reload, home and the strip's collapse button are not shown; their shortcuts still work.
+- **The address bar:**
+  - The security chip shows only its icon; the "Not secure" text is in its tooltip and the site information popup.
+  - Its suggestions open at least 520 px wide, over the page.
+- **Collapsed strip:** the address bar becomes a search icon and the buttons become the app menu. Clicking the icon or pressing Ctrl+L expands the strip with the address bar focused. It collapses again when you leave the address bar.
+- **Popups:** the panels from the bottom buttons (extensions, an extension's popup, the profile menu) open upwards and towards the page, inside the window. Menus let the compositor flip them.
+- **Zen mode** turns Synergy mode off while it is on.
+- **Window buttons:** the caption buttons on the side away from the tab strip would sit on the page, so they are not shown.
+
+**Hide the address bar while the window is focused** is an option under it:
+
+- **When it shows:** the address bar (and the page loading bar inside it) shows only while another window is focused. It slides in and out over 200 ms, moving the tabs down and up.
+- **After you switch back:** it stays for about a third of a second, so the click that focused the window doesn't land on a tab that moved up into its place. If that click was on the address bar, it stays until you leave it.
+- **Shortcuts:** Ctrl+L does nothing. **Ctrl+Shift+L** shows and focuses it, and again hides it. In Zen mode the same shortcut pins the toolbar, as before.
+
+### The address bar socket
+
+With Synergy mode on, Helide serves `$XDG_RUNTIME_DIR/helide-address-bar.sock` for desktop widgets and scripts. Each window reports its URL, title, loading state and exact load fraction, and the suggestions for what you type into the address bar. Programs can navigate (by URL, or by text as if typed), reload, stop, go back and forward, and ask for suggestions for any text. One JSON object per line:
+
+```sh
+echo '{"cmd":"navigate","text":"wayland protocols"}' | socat - UNIX-CONNECT:$XDG_RUNTIME_DIR/helide-address-bar.sock
+```
+
+Only your user can connect. Incognito windows are never on it, and it can't read pages, cookies or passwords. [How it works, the protocol, and examples for the shell, Python, Node.js and Quickshell](docs/address-bar-ipc.md).
+
+### Tests
+
+```sh
+node scripts/test-synergy-mode.mjs       # layout, autohide, shortcuts, collapsed strip, popups
+node scripts/test-address-bar-ipc.mjs    # the socket
+```
+
+Both run Helide against [the fake Wayland compositor](tests/fake-wayland-compositor) with temporary profiles. It can now also click and report where popups go. What they don't cover: the look of the suggestions popup and of the panels, which the fake compositor doesn't draw, and the suggestions for typing in the browser's own address bar.
 
 ## Set the opacity
 

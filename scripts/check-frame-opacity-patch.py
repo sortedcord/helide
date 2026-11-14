@@ -50,6 +50,7 @@ def main():
             "helium/linux/helide-branding.patch",
             "helium/linux/linux-window-close-toggle.patch",
             "helium/linux/linux-three-finger-tab-scrub.patch",
+            "helium/linux/linux-synergy-mode.patch",
         ],
     )
     selected = parser.parse_args().patch

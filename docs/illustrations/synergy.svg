@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="260" viewBox="0 0 720 260" role="img" aria-labelledby="title desc">
+  <title id="title">Synergy mode</title>
+  <desc id="desc">A browser with a toolbar row above vertical tabs. The address bar moves into the top of the tab strip, the toolbar buttons move to its bottom, the toolbar row disappears and the page grows upwards into its space.</desc>
+  <style>
+    text{font-family:system-ui,sans-serif;fill:#D5D6DB}.small{font-size:11px;fill:#787C99}.tab{font-size:12px}
+    .row{animation:row 8s ease-in-out infinite}
+    .page{animation:page 8s ease-in-out infinite}
+    .bar{animation:bar 8s ease-in-out infinite}
+    .buttons{animation:buttons 8s ease-in-out infinite}
+    .tabs{animation:tabs 8s ease-in-out infinite}
+    .hint-a{animation:hint-a 8s ease-in-out infinite}.hint-b{opacity:0;animation:hint-b 8s ease-in-out infinite}
+    @keyframes row{0%,22%{opacity:1}36%,86%{opacity:0}100%{opacity:1}}
+    @keyframes page{0%,24%{transform:translateY(0);height:150px}40%,86%{transform:translateY(-34px);height:184px}100%{transform:translateY(0);height:150px}}
+    .bar-bg{animation:bar-bg 8s ease-in-out infinite}
+    @keyframes bar{0%,18%{transform:translate(0,0)}38%,86%{transform:translate(-116px,1px)}100%{transform:translate(0,0)}}
+    @keyframes bar-bg{0%,18%{transform:scaleX(1)}38%,86%{transform:scaleX(.4167)}100%{transform:scaleX(1)}}
+    @keyframes buttons{0%,18%{transform:translate(0,0)}38%,86%{transform:translate(-360px,169px)}100%{transform:translate(0,0)}}
+    @keyframes tabs{0%,22%{transform:translateY(0)}40%,86%{transform:translateY(-10px)}100%{transform:translateY(0)}}
+    @keyframes hint-a{0%,26%{opacity:1}32%,92%{opacity:0}100%{opacity:1}}
+    @keyframes hint-b{0%,32%{opacity:0}40%,86%{opacity:1}92%,100%{opacity:0}}
+    @media(prefers-reduced-motion:reduce){.row,.page,.bar,.bar-bg,.buttons,.tabs,.hint-a,.hint-b{animation:none!important}.row{opacity:0}.page{transform:translateY(-34px);height:184px}.bar{transform:translate(-116px,1px)}.bar-bg{transform:scaleX(.4167)}.buttons{transform:translate(-360px,169px)}.tabs{transform:translateY(-10px)}.hint-a{opacity:0}.hint-b{opacity:1}}
+  </style>
+  <rect width="720" height="260" rx="16" fill="#0e1017"/>
+  <text x="28" y="28" class="small" letter-spacing="2">SYNERGY MODE</text>
+
+  <!-- the window -->
+  <rect x="150" y="40" width="420" height="200" rx="12" fill="#24283B" stroke="#444B6A"/>
+
+  <!-- the toolbar row, which goes away -->
+  <g class="row">
+    <path d="M150 74H570" stroke="#444B6A"/>
+  </g>
+
+  <!-- the page -->
+  <rect class="page" x="270" y="80" width="292" height="150" rx="8" fill="#1a1b26" stroke="#444B6A"/>
+  <g class="page">
+    <rect x="286" y="96" width="180" height="8" rx="4" fill="#444B6A"/>
+    <rect x="286" y="114" width="230" height="6" rx="3" fill="#444B6A" opacity=".6"/>
+    <rect x="286" y="128" width="200" height="6" rx="3" fill="#444B6A" opacity=".6"/>
+  </g>
+
+  <!-- the tab strip -->
+  <g class="tabs tab">
+    <rect x="160" y="84" width="100" height="22" rx="7" fill="#444B6A"/>
+    <text x="170" y="99">Docs</text><text x="170" y="125">Mail</text>
+    <text x="170" y="149">Maps</text><text x="170" y="173">Music</text>
+  </g>
+
+  <!-- the address bar: across the toolbar row, then in the strip -->
+  <g class="bar">
+    <rect class="bar-bg" x="276" y="47" width="240" height="20" rx="8" fill="#33384f" style="transform-origin:276px 57px"/>
+    <circle cx="288" cy="57" r="3.5" fill="#787C99"/>
+    <text x="298" y="61" class="small" style="fill:#A9B1D6">example.com</text>
+  </g>
+
+  <!-- the toolbar buttons: top right, then the bottom of the strip -->
+  <g class="buttons" fill="#787C99">
+    <circle cx="530" cy="57" r="4"/><circle cx="545" cy="57" r="4"/><circle cx="560" cy="57" r="1.6"/>
+    <circle cx="560" cy="52" r="1.6"/><circle cx="560" cy="62" r="1.6"/>
+  </g>
+
+  <text x="360" y="254" text-anchor="middle" class="small hint-a">THE TOOLBAR ROW AND THE TAB STRIP</text>
+  <text x="360" y="254" text-anchor="middle" class="small hint-b" style="fill:#41A6B5">ONE STRIP: THE PAGE GETS THE TOOLBAR'S HEIGHT</text>
+</svg>

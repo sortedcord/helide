@@ -11,221 +11,22 @@
 // Needs a built tree (build/src/out/Default/helium), libwayland-server and
 // wayland-scanner. HELIDE_TEST_EXECUTABLE overrides the browser.
 import assert from 'node:assert/strict';
-import { execFileSync, spawn } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
-import { createInterface } from 'node:readline';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { fileURLToPath } from 'node:url';
 
-const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
-const browserPath = process.env.HELIDE_TEST_EXECUTABLE ?? join(root, 'build/src/out/Default/helium');
-const compositorPath = join(root, 'build/fake-wayland-compositor/fake-wayland-compositor');
-const STRIP_WIDTH = 215;  // the vertical tab strip, in pixels of the frame
+import {
+  activate, activeTab, changed, ensureBuilt, makeTester, openTabs, run, session as baseSession,
+} from './lib/fake-wayland-browser.mjs';
 
-// ---- fake compositor -------------------------------------------------------
-class Compositor {
-  constructor(runtimeDir, socket) {
-    this.process = spawn(compositorPath, [socket], {
-      env: { ...process.env, XDG_RUNTIME_DIR: runtimeDir },
-      stdio: ['pipe', 'pipe', 'inherit'],
-    });
-    this.lines = [];
-    this.waiters = [];
-    createInterface({ input: this.process.stdout }).on('line', line => {
-      const waiter = this.waiters.shift();
-      if (waiter) waiter(line); else this.lines.push(line);
-    });
-  }
-  next() {
-    const line = this.lines.shift();
-    return line !== undefined ? Promise.resolve(line) : new Promise(resolve => this.waiters.push(resolve));
-  }
-  async cmd(text) {
-    this.process.stdin.write(text + '\n');
-    const reply = await this.next();
-    assert.ok(reply.startsWith('ok'), `compositor: ${text} -> ${reply}`);
-    return reply;
-  }
-  async ready() { assert.match(await this.next(), /^ready/); }
-  async swipe(fingers, frames, dx, dy, { cancel = false, hold = 0 } = {}) {
-    await this.cmd(`swipe_begin ${fingers}`);
-    for (const [fx, fy] of frames ?? []) { await this.cmd(`swipe_update ${fx} ${fy}`); await sleep(16); }
-    if (hold) await sleep(hold);
-    return this;
-  }
-  async end(cancelled = false) { await this.cmd(`swipe_end ${cancelled ? 1 : 0}`); }
-  async frame(path) { await this.cmd(`dump ${path}`); return readPpm(path); }
-  async quit() { try { await this.cmd('quit'); } catch { this.process.kill(); } }
-}
+// The scrub settings for each session, and its log lines with DEBUG=1.
+const session = ({ scrubEnabled = true, scrubInvert = false } = {}, body) => baseSession({
+  browserPrefs: { three_finger_tab_scrub: scrubEnabled, three_finger_tab_scrub_invert: scrubInvert },
+  vmodule: 'helium_tab_scrubber=2',
+  logFilter: /Tab scrub/,
+}, body);
+const tester = makeTester();
+const { test } = tester;
 
-// A straight run of equal frames: `total` DIPs along one axis in `count` frames.
-const run = (total, count, axis = 'y') =>
-  Array.from({ length: count }, () => (axis === 'y' ? [0, total / count] : [total / count, 0]));
-
-// ---- frames ----------------------------------------------------------------
-function readPpm(path) {
-  const data = readFileSync(path);
-  const header = data.subarray(0, 40).toString('latin1').match(/^P6\n(\d+) (\d+)\n255\n/);
-  assert.ok(header, 'PPM header');
-  return { width: +header[1], height: +header[2], pixels: data.subarray(header[0].length) };
-}
-
-// Pixels in the tab strip that changed since `before`, with their centre of mass.
-function changed(before, after, { x0 = 0, x1 = STRIP_WIDTH, threshold = 24 } = {}) {
-  let count = 0, sumY = 0;
-  for (let y = 0; y < after.height; y++) {
-    for (let x = x0; x < Math.min(x1, after.width); x++) {
-      const i = (y * after.width + x) * 3;
-      const delta = Math.abs(after.pixels[i] - before.pixels[i]) +
-          Math.abs(after.pixels[i + 1] - before.pixels[i + 1]) +
-          Math.abs(after.pixels[i + 2] - before.pixels[i + 2]);
-      if (delta > threshold) { count++; sumY += y; }
-    }
-  }
-  return { count, centreY: count ? sumY / count : NaN };
-}
-
-// ---- raw DevTools protocol (no focus or visibility emulation) ---------------
-async function connectCdp(port) {
-  const version = await (await fetch(`http://127.0.0.1:${port}/json/version`)).json();
-  const ws = new WebSocket(version.webSocketDebuggerUrl);
-  await new Promise((ok, fail) => { ws.onopen = ok; ws.onerror = fail; });
-  let nextId = 0;
-  const pending = new Map();
-  ws.onmessage = message => {
-    const data = JSON.parse(message.data);
-    const entry = pending.get(data.id);
-    if (!entry) return;
-    pending.delete(data.id);
-    data.error ? entry.fail(new Error(JSON.stringify(data.error))) : entry.ok(data.result);
-  };
-  const send = (method, params = {}, sessionId) => new Promise((ok, fail) => {
-    const id = ++nextId;
-    pending.set(id, { ok, fail });
-    ws.send(JSON.stringify({ id, method, params, sessionId }));
-  });
-  const evaluate = async (targetId, expression) => {
-    const { sessionId } = await send('Target.attachToTarget', { targetId, flatten: true });
-    try {
-      const result = await send('Runtime.evaluate', { expression, returnByValue: true }, sessionId);
-      return result.result.value;
-    } finally { await send('Target.detachFromTarget', { sessionId }).catch(() => {}); }
-  };
-  const pages = async () => (await send('Target.getTargets')).targetInfos.filter(t => t.type === 'page');
-  return { send, evaluate, pages, close: () => ws.close() };
-}
-
-// ---- the browser -----------------------------------------------------------
-async function launchBrowser(runtimeDir, socket, { scrubEnabled = true, scrubInvert = false } = {}) {
-  const profile = mkdtempSync(join(tmpdir(), 'helide-scrub-profile-'));
-  mkdirSync(join(profile, 'Default'));
-  // The vertical tab layout, where a vertical swipe follows the tab list.
-  writeFileSync(join(profile, 'Default/Preferences'), JSON.stringify({
-    helium: { browser: { layout: 2, three_finger_tab_scrub: scrubEnabled, three_finger_tab_scrub_invert: scrubInvert } },
-  }));
-  const child = spawn(browserPath, [
-    '--ozone-platform=wayland', '--disable-gpu', `--user-data-dir=${profile}`,
-    '--no-first-run', '--no-default-browser-check', '--window-size=1280,800',
-    '--remote-debugging-port=0', '--enable-logging=stderr', '--vmodule=helium_tab_scrubber=2',
-    'about:blank',
-  ], { env: { ...process.env, XDG_RUNTIME_DIR: runtimeDir, WAYLAND_DISPLAY: socket }, stdio: ['ignore', 'ignore', 'pipe'] });
-  let log = '';
-  child.stderr.on('data', data => { log += data; });
-  let port = 0;
-  for (let i = 0; i < 200 && !port; i++) {
-    await sleep(100);
-    try { port = +readFileSync(join(profile, 'DevToolsActivePort'), 'utf8').split('\n')[0]; } catch {}
-  }
-  assert.ok(port, `browser did not start:\n${log.slice(-2000)}`);
-  return { child, profile, port, log: () => log };
-}
-
-async function waitFor(condition, message, { timeout = 15000 } = {}) {
-  const deadline = Date.now() + timeout;
-  while (Date.now() < deadline) {
-    const value = await condition();
-    if (value) return value;
-    await sleep(100);
-  }
-  assert.fail(`timed out: ${message}`);
-}
-
-// ---- scenarios -------------------------------------------------------------
-async function session(options, body) {
-  const runtimeDir = mkdtempSync(join(tmpdir(), 'xdg-scrub-'));
-  const socket = 'wl-scrub-test';
-  const compositor = new Compositor(runtimeDir, socket);
-  await compositor.ready();
-  const browser = await launchBrowser(runtimeDir, socket, options);
-  let cdp;
-  try {
-    const window = await waitFor(async () => {
-      const reply = await compositor.cmd('size');
-      return /commits=([1-9]\d+) toplevel=1 swipe=1 pointer=1/.test(reply) ? reply : null;
-    }, 'the browser window to appear with a swipe gesture object');
-    if (!session.logged) {
-      session.logged = true;
-      console.log(`window: ${window.match(/app_id=(.*)$/)?.[1] || '(none)'} is the Wayland app-id niri will see`);
-    }
-    cdp = await connectCdp(browser.port);
-    await compositor.cmd('enter 640 400');
-    await body({ compositor, cdp, browser });
-  } finally {
-    cdp?.close();
-    if (process.env.SCRUB_DEBUG) {
-      console.log(browser.log().split('\n').filter(line => /Tab scrub/.test(line)).join('\n'));
-    }
-    browser.child.kill('SIGTERM');
-    await compositor.quit();
-    await sleep(300);
-    rmSync(browser.profile, { recursive: true, force: true });
-    rmSync(runtimeDir, { recursive: true, force: true });
-  }
-}
-
-// Opens tabs "Tab 1" ... "Tab N" after the initial one, in strip order.
-async function openTabs(cdp, count) {
-  const html = n => `data:text/html,<title>Tab ${n}</title><body style="height:3000px">Tab ${n}`;
-  for (let n = 1; n <= count; n++) {
-    await cdp.send('Target.createTarget', { url: html(n) });
-    await sleep(120);
-  }
-  await waitFor(async () => (await cdp.pages()).length === count + 1, 'all tabs to open');
-  await sleep(500);
-}
-
-// The title of the tab that is showing, and the page scroll offsets.
-async function activeTab(cdp) {
-  for (const target of await cdp.pages()) {
-    const state = await cdp.evaluate(target.targetId, 'document.visibilityState + "|" + document.title + "|" + scrollY');
-    const [visibility, title, scrollY] = state.split('|');
-    if (visibility === 'visible') return { title: title || 'about:blank', scrollY: +scrollY, targetId: target.targetId };
-  }
-  return null;
-}
-async function activate(cdp, title) {
-  for (const target of await cdp.pages()) {
-    if ((await cdp.evaluate(target.targetId, 'document.title')) === title) {
-      await cdp.send('Target.activateTarget', { targetId: target.targetId });
-      await sleep(400);
-      return;
-    }
-  }
-  assert.fail(`no tab titled ${title}`);
-}
-
-let failures = 0;
-async function test(name, fn) {
-  try { await fn(); console.log(`PASS: ${name}`); }
-  catch (error) { failures++; console.log(`FAIL: ${name}\n  ${String(error.stack ?? error).split('\n').slice(0, 6).join('\n  ')}`); }
-}
-
-if (!existsSync(browserPath)) throw new Error(`No browser at ${browserPath}`);
-if (!existsSync(compositorPath)) {
-  execFileSync(join(root, 'tests/fake-wayland-compositor/build.sh'), { stdio: 'inherit' });
-}
+ensureBuilt();
 
 await session({}, async ({ compositor, cdp }) => {
   await openTabs(cdp, 9);  // strip order: about:blank, Tab 1 ... Tab 9
@@ -362,5 +163,5 @@ await session({ scrubInvert: true }, async ({ compositor, cdp }) => {
   });
 });
 
-if (failures) { console.log(`${failures} test(s) failed`); process.exit(1); }
+if (tester.failures) { console.log(`${tester.failures} test(s) failed`); process.exit(1); }
 console.log('All three-finger tab scrub tests passed.');
